@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Generated outputs (anyone can recreate them by running the scripts)
+data/
+figures/
+
+# Secrets (Azure keys go here later, never commit them)
+.env
+
+# Editors / OS
+.vscode/*
+!.vscode/settings.json
+.DS_Store
+.ipynb_checkpoints/
