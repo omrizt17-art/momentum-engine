@@ -179,8 +179,22 @@ There are four hidden layers.
   going behind).
 - In practice: about 8 switches per match, and roughly a third of minutes in each state.
 
-**What it does to play:** the code uses `d` = +1 when the team on the ball is the dominant one, −1 when it is the
-dominated one, and 0 when balanced. `d` then shifts five probabilities:
+**What it does to play:** `regime` is stored from the **home** team's point of view. Before every action, the
+code converts it to the point of view of **the team on the ball**:
+
+```python
+d = regime if side == "home" else -regime   # +1 = team on the ball is dominant, -1 = dominated, 0 = balanced
+```
+
+| Situation | `regime` | `d` when home has the ball | `d` when away has the ball |
+| --- | --- | --- | --- |
+| Home dominating | +1 | +1 | −1 |
+| Balanced | 0 | 0 | 0 |
+| Away dominating | −1 | −1 | +1 |
+
+So `d` changes whenever possession changes **and** whenever momentum switches. This lets each formula be written
+once for both teams. `d` then shifts five probabilities (effects on the defending team, like tackles, use the same
+`d` of the team on the ball):
 
 | Effect | Formula in the code | Dominant (d = +1) | Balanced (d = 0) | Dominated (d = −1) |
 | --- | --- | --- | --- | --- |
@@ -189,6 +203,13 @@ dominated one, and 0 when balanced. `d` then shifts five probabilities:
 | Chance of being pressed before a pass | 0.22 − 0.08·d | 14% | 22% | 30% |
 | Chance the opponent's tackle succeeds | 0.45 − 0.10·d | 35% | 45% | 55% |
 | Base shot chance per action in the final quarter | 0.024 + 0.010·d (+ more closer to goal) | 3.4% | 2.4% | 1.4% |
+
+These are **starting values**. Pressure, passes into the final third and fatigue all lower completion further, so
+in the generated data (seed 42) completion is about **78% dominant / 77% balanced / 72% dominated**. The
+dominant–balanced gap is small because dominant teams play more passes into the final third, which are harder.
+
+Checked in the data: when home dominates, home completes 77.3% of passes vs away's 72.6%; when away dominates, it
+flips to 78.5% for away vs 71.3% for home. The advantage follows the dominant team, not the home side.
 
 None of these is dramatic on its own. Together, a dominant team progresses further, keeps the ball longer, wins it
 back higher and shoots more, which is what momentum looks like on the pitch.
