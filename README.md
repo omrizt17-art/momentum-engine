@@ -40,8 +40,12 @@ Key moments are turned into short AI-written insights, written differently for a
 | Live event streamer | `src/streamer.py` | A | ✅ Done (local queue; Azure Event Hubs not wired yet) |
 | Incremental metrics engine (momentum, entropy, chaos index, states, key moments) | `src/metrics.py` | A | ✅ v1 done |
 | Engine validation (mean ± sd over seeds) | `src/validate_engine.py` | A | ✅ Done |
-| AI narration (Azure OpenAI, casual / analyst, languages) | `src/narrator.py` | B | ⬜ Next |
-| Dashboard (Streamlit) | `src/app.py` | B | ⬜ Later |
+| Live session (streamer → engine → narrator in a background thread) | `src/live.py` | A + B | ✅ Done |
+| AI narration: Writer (Azure OpenAI) + Verifier + template fallback; casual / analyst; en, he, es templates | `src/narrator.py` | B | ✅ Done. Templates and verifier tested; the live Azure call is not tested (no key yet) |
+| Full-time recap (same Writer / Verifier / fallback pattern) | `src/recap.py` | B | ✅ Done (same caveat) |
+| Terminal demo (backup if the dashboard fails) | `src/run_live.py` | B | ✅ Done |
+| Dashboard (Streamlit) | `src/app.py` | B | ✅ v1 done, tested headless; look and feel not yet reviewed in a browser |
+| Tests | `tests/` | A + B | ✅ 27 tests: no truth leak, no lookahead, determinism, streamer pace, verifier, fallback, recap |
 
 ---
 
@@ -66,8 +70,22 @@ python src/analyze_data.py --data data --match 1 --out figures
 python src/streamer.py --data data --match 1 --speed 30 --jsonl moments.jsonl
 
 # 5. Grade the engine against the hidden truth on fresh matches (a few minutes)
-python src/validate_engine.py --seeds 4 --matches 20
+python src/validate_engine.py --seeds 4 --matches 20 --save results/engine_validation.csv
+
+# 6. Live terminal demo with stories (no data/ folder needed with --simulate)
+python src/run_live.py --simulate --seed 7 --speed 60 --mode analyst --lang he
+
+# 7. The dashboard
+streamlit run src/app.py
+
+# 8. Tests
+python -m pytest tests -q
 ```
+
+**Narrator and Azure OpenAI.** Without settings, stories use built-in templates (English, Hebrew, Spanish) and everything
+works. To use the model, copy `.env.example` to `.env` and fill in the endpoint, key and deployment name. The model's
+sentence is checked against the facts (no invented numbers); if it fails twice, errors out or is slow (8 s), the template
+is used.
 
 Options:
 
@@ -80,7 +98,13 @@ Options:
 | | `--match` | 1 | Which match to replay |
 | | `--speed` | 30 | 30 = 30x real time, 0 = no waiting |
 | | `--jsonl` | none | Also write key moments to this file, one JSON object per line |
+| `run_live.py` | `--simulate` / `--seed` | off / 7 | Simulate a match in memory instead of reading `--data` |
+| | `--speed` | 60 | 60 = one match minute per second, 0 = no waiting |
+| | `--mode` / `--lang` | casual / en | Casual fan or analyst; language code |
+| | `--club` / `--player` | none | Favourite club and player |
+| `narrator.py` | `--demo` | off | Narrate sample moments in every mode and template language |
 | `validate_engine.py` | `--seeds` / `--matches` | 5 / 20 | Independent batches, and matches per batch |
+| | `--save` | none | Write per-seed scores and the summary to a CSV, so two people can compare runs |
 | | `--first-seed` | 1000 | Keep away from the tuning seed (123) |
 | `analyze_data.py` | `--data` | `data` | Folder made by the generator |
 | | `--match` | 1 | Which match to plot in detail |
@@ -100,8 +124,16 @@ momentum-engine/
 │   ├── tune_metrics.py       # grid search and weight fit against the hidden truth (fresh seed)
 │   ├── evaluate.py           # full offline evaluation tables (offline metrics)
 │   ├── metrics.py            # the live engine: momentum, entropy, chaos index, states, key moments
-│   ├── streamer.py           # replays events.csv as a live feed and runs the engine
+│   ├── streamer.py           # replays events.csv as a paced live feed
+│   ├── live.py               # LiveSession: streamer -> engine -> narrator in a background thread
+│   ├── narrator.py           # Writer (Azure OpenAI) + Verifier + template fallback
+│   ├── recap.py              # full-time recap, same pattern
+│   ├── run_live.py           # terminal demo
+│   ├── app.py                # Streamlit dashboard
 │   └── validate_engine.py    # grades the live engine against truth, mean ± sd over seeds
+├── tests/                    # pytest: engine, streamer, narrator, verifier, fallback, recap
+├── results/                  # saved validation numbers (engine_validation.csv)
+├── .env.example              # Azure OpenAI settings (copy to .env, never commit .env)
 ├── docs/img/                 # example figures used in this README
 ├── notebooks/                # exploration only; finished code moves to src/
 ├── requirements.txt
@@ -342,8 +374,9 @@ The offline versions above stay in `analyze_data.py` for the plots; the live ver
 updates the value in O(1). The weights come from a least-squares fit of the hidden regime (`tune_metrics.py`, seed 123):
 completed pass into the final third 1.1, high regain 0.6, shot 3.0, pressing action 2.2. The fit found no use for a
 penalty on lost passes (weight 0). Dominance uses **two thresholds** (hysteresis): a team becomes dominant above 6 points
-per minute and stays dominant until momentum falls below 3. This stops the state flickering, so the narrator is not
-flooded with false "momentum shifted" moments.
+per minute and stays dominant until momentum falls below 3. A `momentum_shift` moment is published only after the new
+state has **held for 60 seconds**, and there is a **2-minute cooldown** between `momentum_shift` / `style_change` moments.
+Together these stop the narrator being flooded with false "momentum shifted" moments.
 
 **Pass entropy (live).** Same Tsallis entropy (q = 0.2) of passer-to-receiver pairs, but over an **exponential-decay
 window** (a pass loses half its weight after 25 of the team's completed passes) instead of "the last 40 passes", so there
@@ -355,23 +388,29 @@ The baseline starts after 40 completed passes (about 10 minutes), so there is no
 length (`end_x - x`) and sideways spread (`end_y - y`). Higher = less predictable play. Completion rate is **not** in the
 index: it also falls when a team is dominated (72% vs 78%), so it would mix up "chaotic" with "being pushed back". Spread
 of pass length and direction are plausible chaos signals in real football too, not only in this generator.
+Even without completion, the index was still linked to dominance (r = -0.16: a pushed-back team's passes clip at the
+pitch edge, so their length spread shrinks). The engine removes this with one number: `chaos + 0.2 × (team momentum / 10)`.
+On fresh matches the link drops to 0.01 and the chaos AUC does not change.
 
 **Match state (live).** The four-cell table below, computed for each team. "More chaotic than the opponent" uses a dead
 band (0.25) and can change at most once every 3 minutes, so the label is stable.
 
-**Key moments.** Three types, as JSON for the narrator:
+**Key moments.** Four types, as JSON for the narrator:
 - `goal`
-- `momentum_shift`: a team enters the dominant state (never in the first 3 minutes)
+- `big_chance`: a missed shot with xG of 0.3 or more (at most one per minute)
+- `momentum_shift`: a team enters the dominant state and holds it for 60 seconds (never in the first 3 minutes)
 - `style_change`: the dominant team's quadrant changes (control and chaos swap)
 
-Each one carries `drivers`: plain-language reasons from the last 5 minutes. This replaces the draft in "Working
-together" (same fields, plus `timestamp_s` and `chaos_diff`):
+Each one carries `drivers` (plain-language reasons from the last 5 minutes) and `facts` (the same reasons as numbers,
+for templates and for checking the model's text). This replaces the draft in "Working together":
 
 ```json
 {"match_id": 1, "elapsed_minute": 42, "timestamp_s": 2547.3, "type": "momentum_shift",
  "team": "away", "team_name": "Redcliffe Town", "momentum": -6.0, "state": "controlled_dominance",
  "chaos_diff": -0.27, "drivers": ["21 completed passes into the final third vs 2 in 5 min",
  "5 high regains vs 3 in 5 min", "more predictable passing than the opponent"],
+ "facts": {"window_min": 5, "counts": {"high_regain": [5, 3], "shot": [0, 0], "ft_pass": [21, 2], "pressure": [8, 6]},
+           "passing": "more_predictable"},
  "score": {"home": 0, "away": 1}}
 ```
 
@@ -383,7 +422,24 @@ for the dashboard.
 Combining dominance and chaos gives four states, per team:
 
 | | Lower entropy than opponent | Higher entropy than opponent |
-| --- | --- | --- |
+| ### Narration (`src/narrator.py`, `src/recap.py`)
+
+Two roles with different jobs, plus a safety net:
+
+| Role | What it does |
+| --- | --- |
+| **Writer** | An Azure OpenAI model writes one or two sentences from the moment's facts, for the viewer's mode (casual: warm, no numbers; analyst: numbers and the reason), language, favourite club and favourite player |
+| **Verifier** | Plain code checks the sentence: casual text has no numbers except the minute; analyst text uses only numbers that are in the facts. On failure the Writer gets the reason and one more try |
+| **Fallback** | Model missing, slow (8 s), erroring, or rejected twice: a template sentence (English, Hebrew, Spanish). Other languages fall back to English and say so |
+
+The model never blocks the stream: a card appears at once with the template sentence, and a worker thread upgrades it
+when the model answers (`live.py`). Changing mode or language re-tells the existing cards and the recap. The same
+Writer / Verifier / fallback pattern writes the full-time recap from the score, shots, xG and dominant spells
+("episodes", for example "Redcliffe Town were on top from 26' to 67'").
+
+---
+
+| --- | --- |
 | **Winning momentum** | Controlled dominance | Chaotic pressure |
 | **Losing momentum** | Being read | Scrambling |
 
@@ -415,12 +471,12 @@ tuning; mean ± sd across seeds):
 | Momentum vs hidden regime (correlation) | 0.81 ± 0.02 | |
 | Dominance state (with hysteresis) correct | 76% ± 2 of minutes | Most-common-state baseline about 42% |
 | Real switches caught within 3 minutes | 79% ± 2 (median lag 2 min) | Switches into a dominant state that lasts 5+ minutes |
-| `momentum_shift` moments that match a real switch | 58% ± 4 precision, 85% ± 4 recall | About 7.4 shifts per match |
+| `momentum_shift` moments that match a real switch | 66% ± 3 precision, 81% ± 4 recall | About 6.3 shifts per match (hold 60 s, cooldown 2 min; was 58% / 85% / 7.4 without them) |
 | Momentum predicts shot difference in the next 3 min | r = 0.48 ± 0.03 | A naive "shots in the last 3 min" gives 0.35 |
 | Chaos: decay-window entropy, raw | AUC 0.63 ± 0.04 | Hard 40-pass window on the same minutes: 0.71 |
 | Chaos: decay-window entropy vs own baseline | AUC 0.71 ± 0.04 | Same as the old raw window |
 | Chaos: composite chaos index | **AUC 0.83 ± 0.01** | 0.5 = no signal, 1.0 = perfect |
-| Chaos index vs hidden dominance | r = -0.16 ± 0.05 | Confound check: should be 0. Small but not zero |
+| Chaos index vs hidden dominance | r = 0.01 ± 0.03 | Confound check: should be 0. Was -0.16 before the adjustment |
 
 **Offline version vs live engine**, same four batches (`evaluate.py` for the offline numbers: 3-minute window, pass
 weight 0.5, threshold 5, last 40 passes):
@@ -441,8 +497,9 @@ How to read this honestly:
 - **The decay window alone did not help.** Raw, it is worse than the hard 40-pass window (0.63 vs 0.71), because it is
   more exposed to the fixed style difference between teams. Reading it against the team's own baseline brings it back
   to the old level. **The real gain comes from the composite chaos index** (0.71 to 0.83), which uses extra signals.
-- Precision of `momentum_shift` is the weak point. The thresholds (6 and 3) were chosen on seed 1000 as a compromise:
-  lower thresholds catch switches faster (lag 1 minute) but give about 12 moments per match with 49% precision.
+- Precision of `momentum_shift` is still the weakest number. The thresholds (6 and 3), the 60-second hold and the
+  cooldown were chosen on seed 1000 as a compromise: shorter holds catch switches sooner but raise false moments;
+  a 120-second hold reaches 83% precision but recall drops to 71%.
 - Momentum weights were fitted on the generator, so the 0.81 is partly "we recovered what we put in" (see Known
   limitations). The shot-prediction row is the less circular check, but the generator also links regime to shots.
 
@@ -469,13 +526,17 @@ the streamer to Azure Event Hubs.
 
 | Brief stage | Our component |
 | --- | --- |
-| (a) Ingest events as they happen | `streamer.py` publishes events one at a time (Azure Event Hubs, local queue as fallback) |
-| (b) Interpret into stats and patterns | `metrics.py`: momentum, entropy, match state, per-player form |
-| (c) Explain why a moment matters | Key moments with their drivers: "control vs chaos", pressure changes, rhythm |
-| (d) Render on screen | Streamlit dashboard + timed JSON overlay events |
-| (e) Personalize | Casual vs analyst mode, favorite club, favorite player, language |
+| (a) Ingest events as they happen | `streamer.py` plays events one at a time at a chosen speed into a local queue (Azure Event Hubs not wired yet) |
+| (b) Interpret into stats and patterns | `metrics.py`: momentum, entropy, chaos index, match state, big chances |
+| (c) Explain why a moment matters | Key moments with `drivers` and `facts`: "control vs chaos", pressing, regains, shots |
+| (d) Render on screen | `app.py` Streamlit dashboard; key moments are timed, machine-readable JSON that an overlay renderer could use |
+| (e) Personalize | Casual vs analyst experience (different layout and text), favourite club, favourite player, language |
+| (iii) Narrative generation | `narrator.py` stories and `recap.py` full-time recap |
+| (iv) Explainability | "Why it matters" panel in analyst mode; Verifier that blocks invented numbers |
 | (v) Data innovation | This generator, with hidden ground truth for validation |
-| (vi) Multi-language | LLM narration in the viewer's language |
+| (vi) Multi-language | Model writes in any supported language; template fallback in en, he, es |
+
+Not covered: player identification overlays, ball and shot speed, auto-eventing from video.
 
 ---
 
@@ -513,6 +574,7 @@ the streamer to Azure Event Hubs.
     "score": {"home": 1, "away": 1}
   }
   ```
+  The final version (more fields: `timestamp_s`, `chaos_diff`, `facts`; four types) is in "Live engine" above.
 - **Secrets:** Azure keys go in a `.env` file, which is git-ignored. Never commit keys.
 - **Notebooks:** fine for exploring in `notebooks/`; once something works, move it into `src/`.
 
@@ -521,16 +583,22 @@ the streamer to Azure Event Hubs.
 ## Known limitations
 
 - **Circularity:** the validation only shows that we recover what we built into the generator. It proves the
-  pipeline works, not that real football behaves this way. The pipeline is ready to test on real tracking data.
+  pipeline works, not that real football behaves this way. (The hackathon requires synthetic data for the project, so
+  we have not tried real event data.)
 - **Entropy evidence is season-level:** Neuman et al. linked entropy to final league position over a season.
   Nobody has shown it works minute to minute; we present it as "inspired by", not proven.
 - **Short windows are noisy:** 40 passes is a small sample, and q = 0.2 amplifies rare passes.
 - **Fitted weights:** the momentum weights come from a least-squares fit on this generator. They show the method works,
   not that these weights suit real football.
-- **Chaos is partly confounded with dominance** (r = -0.16): when a team is pushed back its passes clip at the pitch
-  edge, so their length spread shrinks. Small, but it is there.
-- **Key-moment precision is 58%:** some `momentum_shift` moments are early or brief. The thresholds trade speed for
-  precision.
+- **Chaos and dominance are separated by a fitted correction** (beta = 0.2, tuned on one seed). The raw link was
+  r = -0.16; it is now about 0, but the correction is another number fitted on this generator.
+- **Key-moment precision is 66%:** some `momentum_shift` moments are early or brief. The hold time and thresholds trade
+  speed for precision.
+- **The Azure OpenAI path has not run against the real service yet.** It is tested with a fake client (accepted answer,
+  one retry, two rejections, error and timeout), and the templates are tested directly.
+- **The dashboard was tested headless** (no errors in casual and analyst mode, language switch). Layout and look were
+  not reviewed in a browser.
+- **Templates only for en, he, es.** Other languages need the model.
 - **Simplified football:** no set pieces, fouls, cards, substitutions or offsides yet.
 
 ---

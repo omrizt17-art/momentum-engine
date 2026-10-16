@@ -131,6 +131,7 @@ def main():  # command-line entry point
     ap.add_argument("--first-seed", type=int, default=1000, help="first seed (keep away from the tuning seed 123)")  # seed offset
     ap.add_argument("--thr-in", type=float, default=None, help="momentum threshold to enter a dominant state")  # engine override
     ap.add_argument("--thr-out", type=float, default=None, help="momentum threshold to leave it")  # engine override
+    ap.add_argument("--save", default=None, help="write the per-seed scores and the summary to this CSV file")  # optional output
     ap.add_argument("--halflife", type=float, default=None, help="momentum half-life in minutes")  # engine override
     args = ap.parse_args()  # read options
     kw = {k: v for k, v in (("thr_in", args.thr_in), ("thr_out", args.thr_out), ("halflife_min", args.halflife)) if v is not None}  # only what was set
@@ -138,7 +139,10 @@ def main():  # command-line entry point
     df = pd.DataFrame(rows)  # scores per seed
     pd.set_option("display.width", 200)  # wide printing
     print(f"{args.seeds} seeds x {args.matches} matches (seeds {args.first_seed}..{args.first_seed + args.seeds - 1})\n")  # header
-    print(pd.DataFrame({"mean": df.mean(), "sd": df.std()}).round(3).to_string())  # summary
+    summary = pd.DataFrame({"mean": df.mean(), "sd": df.std()}).round(3)  # mean and sd across seeds
+    print(summary.to_string())  # summary
+    if args.save:  # keep the numbers so two people can compare runs
+        pd.concat([df.round(3).T.add_prefix("seed_"), summary], axis=1).to_csv(args.save)  # one row per measure
 
 
 if __name__ == "__main__":  # run only when executed directly

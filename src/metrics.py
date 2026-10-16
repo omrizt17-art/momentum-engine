@@ -51,6 +51,10 @@ MOM_WARMUP_S = 180  # no key moments in the first 3 minutes: momentum has not bu
 CHAOS_BAND = 0.25  # chaos difference needed before the "more chaotic" team changes
 CHAOS_DWELL_S = 180  # and it can change at most once every 3 minutes (stops flicker)
 DRIVER_WINDOW_S = 300  # key-moment explanations look at the last 5 minutes
+SHIFT_HOLD_S = 60  # a new dominant state must hold this long before a momentum_shift moment is published
+MOMENT_COOLDOWN_S = 120  # at most one momentum_shift / style_change moment in this many seconds
+CHAOS_BETA = 0.2  # removes the link between chaos and dominance: chaos + beta * (team momentum / 10)
+BIG_CHANCE_XG = 0.3  # a missed shot with at least this xG is a "big_chance" moment
 
 OTHER = {"home": "away", "away": "home"}
 REGIME = {"home": 1, "balanced": 0, "away": -1}
@@ -155,8 +159,15 @@ def _pidx(player_id):
 class Engine:
     """Reads events in order and tracks momentum, entropy, chaos, match state and key moments."""
 
-    def __init__(self, weights=None, thr_in=THR_IN, thr_out=THR_OUT, halflife_min=MOM_HALFLIFE_MIN):
+    def __init__(self, weights=None, thr_in=THR_IN, thr_out=THR_OUT, halflife_min=MOM_HALFLIFE_MIN,
+                 shift_hold_s=None, cooldown_s=None, chaos_beta=None):
         self.w = dict(WEIGHTS if weights is None else weights)
+        self.shift_hold_s = SHIFT_HOLD_S if shift_hold_s is None else shift_hold_s
+        self.cooldown_s = MOMENT_COOLDOWN_S if cooldown_s is None else cooldown_s
+        self.chaos_beta = CHAOS_BETA if chaos_beta is None else chaos_beta
+        self.pending = None  # (team, since) for a dominant state that has not held long enough yet
+        self.last_moment_t = -1e9  # stream time of the last momentum_shift / style_change
+        self.last_chance_t = -1e9  # stream time of the last big_chance
         self.thr_in, self.thr_out = thr_in, thr_out
         self.tau_min = halflife_min / math.log(2)  # time constant of the decay, in minutes
         self.decay_per_s = math.log(2) / (halflife_min * 60)
@@ -192,7 +203,12 @@ class Engine:
             self.recent.popleft()
 
         if ev["event_type"] == "shot" and ev["outcome"] == "goal":
-            out.append(self._moment("goal", ev["team"], t, drivers=[f"{ev['player_name']} scores (xG {ev['xg']:.2f})"]))
+            out.append(self._moment("goal", ev["team"], t, drivers=[f"{ev['player_name']} scores (xG {ev['xg']:.2f})"],
+                                    facts={"player": ev["player_name"], "xg": round(float(ev["xg"]), 2)}))
+        elif ev["event_type"] == "shot" and ev["xg"] >= BIG_CHANCE_XG and t - self.last_chance_t >= max(self.cooldown_s, 60):
+            self.last_chance_t = t
+            out.append(self._moment("big_chance", ev["team"], t, drivers=[f"{ev['player_name']}: {ev['outcome'].replace('_', ' ')} (xG {ev['xg']:.2f})"],
+                                    facts={"player": ev["player_name"], "xg": round(float(ev["xg"]), 2), "outcome": ev["outcome"]}))
         out += self._update_states(t)
         self.moments += out
         return out
@@ -204,9 +220,16 @@ class Engine:
         """Home minus away threat, in points per minute (positive = home on top)."""
         return (self.m["home"] - self.m["away"]) / self.tau_min
 
+    def chaos_of(self, team):
+        """Chaos index of one team, with the link to dominance removed (beta = 0 means no adjustment)."""
+        if self.style[team].n_complete < WARMUP_PASSES:
+            return 0.0  # no reading yet
+        sign = 1 if team == "home" else -1
+        return self.style[team].chaos + self.chaos_beta * sign * self.momentum / 10.0
+
     def chaos_diff(self):
         """Home chaos index minus away chaos index (positive = home is the less predictable side)."""
-        return self.style["home"].chaos - self.style["away"].chaos
+        return self.chaos_of("home") - self.chaos_of("away")
 
     def team_state(self, team):
         """Match-state quadrant for one team (see README): dominance x (more or less chaotic than the opponent)."""
@@ -224,7 +247,7 @@ class Engine:
         for team in ("home", "away"):
             st = self.style[team]
             s[team] = {"entropy": round(st.entropy, 3), "entropy_rel": round(st.entropy_rel, 3),
-                       "chaos": round(st.chaos, 2), "state": self.team_state(team)}
+                       "chaos": round(self.chaos_of(team), 2), "state": self.team_state(team)}
         return s
 
     # ----- internals -----
@@ -274,21 +297,37 @@ class Engine:
                 self.chaotic_side, self.chaotic_since = ("home" if diff >= 0 else "away"), t
             elif want and want != self.chaotic_side and t - self.chaotic_since >= CHAOS_DWELL_S:  # clear change and not too soon
                 self.chaotic_side, self.chaotic_since = want, t
+        if self.regime != old_regime:  # a new dominance state: start (or cancel) the hold timer
+            self.pending = ("home" if self.regime == 1 else "away", t) if self.regime != 0 else None
         if t < MOM_WARMUP_S:
             return out
-        if self.regime != old_regime and self.regime != 0:
-            team = "home" if self.regime == 1 else "away"
+        cool = t - self.last_moment_t >= self.cooldown_s
+        if self.pending and cool and t - self.pending[1] >= self.shift_hold_s:
+            team = self.pending[0]
+            self.pending = None
+            self.last_moment_t = t
             out.append(self._moment("momentum_shift", team, t, drivers=self._drivers(team)))
-        elif self.regime != 0 and self.chaotic_side != old_side and old_side is not None:
+        elif self.regime != 0 and self.chaotic_side != old_side and old_side is not None and cool:
             team = "home" if self.regime == 1 else "away"
+            self.last_moment_t = t
             out.append(self._moment("style_change", team, t, drivers=self._drivers(team, style_only=True)))
         return out
 
-    def _moment(self, kind, team, t, drivers):
+    def _moment(self, kind, team, t, drivers, facts=None):
         return {"match_id": self.match_id, "elapsed_minute": int(t // 60), "timestamp_s": round(t, 1), "type": kind,
                 "team": team, "team_name": self.names.get(team), "momentum": round(self.momentum, 2),
-                "state": self.team_state(team) if kind != "goal" else None, "chaos_diff": round(self.chaos_diff(), 2),
-                "drivers": drivers, "score": dict(self.score)}
+                "state": self.team_state(team) if kind not in ("goal", "big_chance") else None, "chaos_diff": round(self.chaos_diff(), 2),
+                "drivers": drivers, "facts": facts if facts is not None else self._facts(team),
+                "score": dict(self.score)}
+
+    def _facts(self, team):
+        """The same reasons as _drivers, as numbers: {kind: [team count, opponent count]} over the last 5 minutes."""
+        n = {(tm, k): 0 for tm in ("home", "away") for k in self.w}
+        for _, tm, k in self.recent:
+            n[(tm, k)] += 1
+        counts = {k: [n[(team, k)], n[(OTHER[team], k)]] for k in ("high_regain", "shot", "ft_pass", "pressure")}
+        passing = None if self.chaotic_side is None else ("less_predictable" if self.chaotic_side == team else "more_predictable")
+        return {"window_min": DRIVER_WINDOW_S // 60, "counts": counts, "passing": passing}
 
     def _drivers(self, team, style_only=False):
         """Plain-language reasons: what the team did more than the opponent in the last 5 minutes."""

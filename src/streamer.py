@@ -31,13 +31,13 @@ def load_events(data_dir, match_id):  # one match's events as plain dicts, in ev
     return df.to_dict("records")  # list of dicts
 
 
-def stream_events(events, speed=1.0, sleep=time.sleep):  # yield events, waiting so that stream time passes `speed` times faster than real time
+def stream_events(events, speed=1.0, sleep=time.sleep, clock=time.monotonic):  # yield events, waiting so that stream time passes `speed` times faster than real time
     start = events[0]["timestamp_s"] if events else 0.0  # stream time of the first event
-    clock = time.monotonic()  # wall-clock reference
+    t0 = clock()  # wall-clock reference
     for ev in events:  # each event
         if speed > 0:  # speed 0 = no waiting
             due = (ev["timestamp_s"] - start) / speed  # when this event is due, in wall-clock seconds
-            wait = due - (time.monotonic() - clock)  # how long until then
+            wait = due - (clock() - t0)  # how long until then
             if wait > 0:  # not yet
                 sleep(wait)  # wait
         yield ev  # hand the event over
