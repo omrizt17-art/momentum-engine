@@ -26,8 +26,11 @@ STATE_LABEL = {  # plain-language match state, per team
     "controlled_dominance": ("Controlled dominance", "green"), "chaotic_pressure": ("Chaotic pressure", "orange"),
     "being_read": ("Being read", "red"), "scrambling": ("Scrambling", "violet"), "balanced": ("Balanced", "gray"),
 }
-ICON = {"goal": "⚽", "big_chance": "🎯", "momentum_shift": "🔥", "style_change": "🧠"}
-TITLE = {"goal": "Goal", "big_chance": "Big chance", "momentum_shift": "Momentum shift", "style_change": "Change of style"}
+ICON = {"goal": "⚽", "big_chance": "🎯", "momentum_shift": "🔥", "style_change": "🧠", "player_focus": "⭐"}
+TITLE = {"goal": "Goal", "big_chance": "Big chance", "momentum_shift": "Momentum shift", "style_change": "Change of style", "player_focus": "Your player"}
+BADGE = {"long_pass": "🎯 long pass", "hard_pass": "🧩 hard pass", "fast_ball": "💨 fast ball", "power_shot": "🚀 power shot", "goal": "⚽ goal",
+         "big_chance": "🎯 big chance", "milestone": "🏅 milestone"}
+STATUS = {"ok": "✓", "skipped": "–", "rejected": "✗", "error": "!"}
 
 
 @st.cache_resource
@@ -124,17 +127,42 @@ def render():
             if mode == "analyst":
                 st.caption("Chaos index per team (higher = less predictable passing, vs the team's own average)")
                 st.line_chart(df[["home_chaos", "away_chaos"]].rename(columns={"home_chaos": home, "away_chaos": away}), height=200)
+        fp = v["focus_player"]
+        if fp:  # player-focused mode: the followed player's numbers
+            st.subheader(f"Following {fp['name']} ({fp['position']})")
+            f1, f2, f3, f4 = st.columns(4)
+            f1.metric("Passes", f"{fp['complete']}/{fp['passes']}", f"{fp['accuracy_pct']}% accurate", delta_color="off")
+            f2.metric("Shots", fp["shots"], f"{fp['goals']} goal(s)" if fp["goals"] else None, delta_color="off")
+            f3.metric("Longest pass", f"{fp['longest']:.0f} m")
+            f4.metric("Top ball speed", f"{fp['top_speed']:.0f} km/h")
+        elif session.players.focus:
+            st.caption(f"Waiting for {session.players.focus} to appear in the match…")
+        st.subheader("Player tags")
+        tags = v["ticker"][-8:][::-1] if mode == "analyst" else v["notable"][-5:][::-1]
+        if not tags:
+            st.caption("Name tags will appear here.")
+        for o in tags:
+            badges = "  ".join(BADGE.get(b, b) for b in o["badges"])
+            st.markdown(f"`{o['minute']}'` **{o['name']}** ({o['position']}) · {o['text'].split(' · ', 1)[1] if mode == 'analyst' else ''} {badges}")
         if mode == "analyst":
+            st.caption("Most involved players")
+            rows = [{"team": names.get(t, t), "player": r["name"], "pos": r["position"], "events": r["involvement"], "pass acc %": r["accuracy_pct"],
+                     "avg difficulty": r["avg_difficulty"], "top speed km/h": round(r["top_speed"])} for t in ("home", "away") for r in v["top_players"][t][:3]]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             t = v["totals"]
             st.dataframe(pd.DataFrame({home: [t["home"]["shots"], round(t["home"]["xg"], 2), t["home"]["complete"], t["home"]["passes"]],
                                        away: [t["away"]["shots"], round(t["away"]["xg"], 2), t["away"]["complete"], t["away"]["passes"]]},
                                       index=["Shots", "xG", "Passes completed", "Passes attempted"]), use_container_width=True)
     with right:
         st.subheader("Insights")
+        if v["breaker_open"]:
+            st.warning("The model is failing, so stories use templates for a moment (circuit breaker open).")
         if v["finished"] and v["recap"]:
             with st.container(border=True):
                 st.markdown("**Full time**")
                 st.write(v["recap"]["text"])
+                if mode == "analyst":
+                    st.caption("Agents: " + "  →  ".join(f"{t['agent']} {STATUS.get(t['status'], '?')}" for t in v["recap"]["trace"]))
         elif v["finished"]:
             st.caption("Writing the recap…")
         if not v["cards"]:
@@ -150,6 +178,11 @@ def render():
                             st.write("• " + d)
                         st.caption(f"momentum {m['momentum']:+.1f} · chaos difference {m['chaos_diff']:+.2f} · written by "
                                    + ("Azure OpenAI" if card["source"] == "llm" else "template") + (f" · {card['note']}" if card["note"] else ""))
+                        if card.get("analysis"):
+                            st.caption(f"Analyst note: {card['analysis']}")
+                        if card.get("trace"):
+                            st.caption("Agents: " + "  →  ".join(f"{t['agent']} {STATUS.get(t['status'], '?')}" for t in card["trace"])
+                                       + (f"  ·  priority {card['plan']['priority']}" if card.get("plan") else ""))
 
 
 running = bool(session.thread and session.thread.is_alive())

@@ -313,10 +313,14 @@ class Engine:
             out.append(self._moment("style_change", team, t, drivers=self._drivers(team, style_only=True)))
         return out
 
+    def moment(self, kind, team, t, drivers, facts=None):
+        """A key moment built from outside the engine (for example a player-focus moment), with the engine's current momentum and state."""
+        return self._moment(kind, team, t, drivers, facts)
+
     def _moment(self, kind, team, t, drivers, facts=None):
         return {"match_id": self.match_id, "elapsed_minute": int(t // 60), "timestamp_s": round(t, 1), "type": kind,
                 "team": team, "team_name": self.names.get(team), "momentum": round(self.momentum, 2),
-                "state": self.team_state(team) if kind not in ("goal", "big_chance") else None, "chaos_diff": round(self.chaos_diff(), 2),
+                "state": self.team_state(team) if kind not in ("goal", "big_chance", "player_focus") else None, "chaos_diff": round(self.chaos_diff(), 2),
                 "drivers": drivers, "facts": facts if facts is not None else self._facts(team),
                 "score": dict(self.score)}
 

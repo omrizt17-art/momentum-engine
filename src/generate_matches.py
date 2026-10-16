@@ -76,7 +76,12 @@ def shot_xg(x, y):  # simple expected-goals model from shot location
     return float(1 / (1 + np.exp(0.17 * dist - 0.6)))  # logistic decay: ~0.22 at 11 m, ~0.06 at 20 m
 
 
+def metres(x0, y0, x1, y1):  # straight-line distance in metres between two pitch points (pitch ~105 x 68 m)
+    return float(np.hypot((x1 - x0) * 1.05, (y1 - y0) * 0.68))
+
+
 def simulate_match(match_id, rng):  # simulate one full match
+    speed_rng = np.random.default_rng(int(rng.bit_generator.state["state"]["state"]) % (2 ** 32))  # separate stream for ball speeds: reads the main RNG state without using it, so every other column stays identical
     home_name, away_name = rng.choice(TEAM_NAMES, size=2, replace=False)  # two different clubs
     surnames = rng.choice(LAST_NAMES, size=22, replace=False)  # 22 different surnames so no two players in a match share one
     teams = {"home": make_team(home_name, "home", rng, surnames[:11]), "away": make_team(away_name, "away", rng, surnames[11:])}  # build both squads
@@ -96,6 +101,9 @@ def simulate_match(match_id, rng):  # simulate one full match
     elapsed = 0.0  # continuous seconds since kickoff (used for live streaming)
     eid = 0  # event counter
 
+    def shot_speed(x, y):  # shot speed in km/h: faster from range, with noise
+        return round(float(np.clip(speed_rng.normal(84 + 0.5 * metres(x, y, 100, 50), 9), 55, 130)), 1)
+
     def add(side, player, etype, outcome, x, y, period, clock, **extra):  # append one event row
         nonlocal eid  # modify the counter defined above
         eid += 1  # next event id
@@ -109,6 +117,7 @@ def simulate_match(match_id, rng):  # simulate one full match
             "end_x": extra.get("end_x"), "end_y": extra.get("end_y"),  # where the ball went (passes)
             "receiver_id": extra.get("receiver_id"), "receiver_name": extra.get("receiver_name"),  # intended receiver (passes)
             "xg": extra.get("xg"), "under_pressure": extra.get("under_pressure", False),  # shot quality and pressure flag
+            "ball_speed_kmh": extra.get("ball_speed_kmh"),  # measured ball speed (passes and shots)
             "home_score": score["home"], "away_score": score["away"],  # score after this event
         })
 
@@ -144,7 +153,7 @@ def simulate_match(match_id, rng):  # simulate one full match
                 xg = min(0.95, shot_xg(x, y) * (1.2 if is_hot else 1.0))  # shot quality, better if hot
                 if rng.random() < xg:  # the shot goes in
                     score[side] += 1  # update the score
-                    add(side, holder, "shot", "goal", x, y, period, clock, xg=round(xg, 3))  # log the goal
+                    add(side, holder, "shot", "goal", x, y, period, clock, xg=round(xg, 3), ball_speed_kmh=shot_speed(x, y))  # log the goal
                     if rng.random() < 0.4:  # sometimes the conceding team surges after a goal
                         regime = -1 if side == "home" else 1  # momentum flips to the conceding side
                     side = other[side]  # conceding team kicks off
@@ -153,7 +162,7 @@ def simulate_match(match_id, rng):  # simulate one full match
                     dt = rng.uniform(40, 70)  # celebration and restart time
                 else:  # the shot does not go in
                     outcome = str(rng.choice(["saved", "off_target", "blocked"], p=[0.4, 0.4, 0.2]))  # what happened to it
-                    add(side, holder, "shot", outcome, x, y, period, clock, xg=round(xg, 3))  # log the shot
+                    add(side, holder, "shot", outcome, x, y, period, clock, xg=round(xg, 3), ball_speed_kmh=shot_speed(x, y))  # log the shot
                     side = other[side]  # opponent gets the ball
                     holder = [p for p in teams[side]["players"] if p["position"] == "GK"][0]  # their goalkeeper restarts
                     x, y = 6.0, 50.0  # goal kick position
@@ -178,7 +187,8 @@ def simulate_match(match_id, rng):  # simulate one full match
                 ok = rng.random() < p_ok  # does the pass arrive
                 add(side, holder, "pass", "complete" if ok else "incomplete", x, y, period, clock,  # log the pass
                     end_x=round(ex, 1), end_y=round(ey, 1), receiver_id=receiver["player_id"],  # where and to whom
-                    receiver_name=receiver["player_name"], under_pressure=bool(pressed))  # receiver name and pressure flag
+                    receiver_name=receiver["player_name"], under_pressure=bool(pressed),  # receiver name and pressure flag
+                    ball_speed_kmh=round(float(np.clip(speed_rng.normal(32 + 1.1 * metres(x, y, ex, ey), 5), 20, 115)), 1))  # ball speed: longer passes are hit harder
                 if ok:  # pass completed
                     holder, x, y = receiver, ex, ey  # receiver now has the ball
                 else:  # pass lost

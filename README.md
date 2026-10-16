@@ -16,12 +16,15 @@ Key moments are turned into short AI-written insights, written differently for a
 ## Contents
 
 - [Status](#status)
+- [Submission checklist](#submission-checklist)
 - [Quick start](#quick-start)
 - [Project structure](#project-structure)
 - [The data](#the-data)
 - [The hidden truth: what it is and how it is defined](#the-hidden-truth-what-it-is-and-how-it-is-defined)
 - [The metrics](#the-metrics)
 - [Results so far](#results-so-far)
+- [Narration: a team of agents](#narration-a-team-of-agents-srcagentspy-srcnarratorpy-srcrecappy)
+- [Azure set-up guide](docs/AZURE.md)
 - [How it maps to the hackathon brief](#how-it-maps-to-the-hackathon-brief)
 - [Roadmap](#roadmap)
 - [Working together](#working-together)
@@ -44,9 +47,12 @@ Key moments are turned into short AI-written insights, written differently for a
 | AI narration: Writer (Azure OpenAI) + Verifier + template fallback; casual / analyst; en, he, es templates | `src/narrator.py` | B | ✅ Done. Templates and verifier tested; the live Azure call is not tested (no key yet) |
 | Full-time recap (same Writer / Verifier / fallback pattern) | `src/recap.py` | B | ✅ Done (same caveat) |
 | Terminal demo (backup if the dashboard fails) | `src/run_live.py` | B | ✅ Done |
-| Dashboard (Streamlit) | `src/app.py` | B | ✅ v1 done, tested headless; look and feel not yet reviewed in a browser |
+| Multi-agent newsroom: Director, Analyst, Writer, Verifier, Fallback, circuit breaker, trace | `src/agents.py` | B | ✅ Done, tested with a scripted fake model |
+| Player layer: name tags, pass distance / accuracy / difficulty, ball speed, badges, player focus | `src/players.py` | A | ✅ Done |
+| Auto-eventing prototype on synthetic tracking | `src/autoevent.py` | A | ✅ Done (circular by construction, see above) |
+| Dashboard (Streamlit) | `src/app.py` | B | ✅ v2 done (player tags, player focus, agent trace), tested headless; look and feel not yet reviewed in a browser |
 | Azure Event Hubs transport (publisher and live feed) | `src/eventhub.py` | A | ✅ Done, tested with fake producer and consumer. Not tested against a real namespace |
-| Tests | `tests/` | A + B | ✅ 37 tests: no truth leak, no lookahead, determinism, streamer pace, verifier, fallback, recap, Event Hubs (fakes), dashboard (headless) |
+| Tests | `tests/` | A + B | ✅ 65 tests: no truth leak, no lookahead, determinism, streamer pace, verifier, fallback, recap, Event Hubs (fakes), dashboard (headless), agents, players, auto-eventing |
 
 ---
 
@@ -59,6 +65,7 @@ Hackathon: Inside the Game (Microsoft x Premier League). Submissions close **27 
 | Public GitHub repository | ⬜ Currently private: make it public before submitting |
 | Pitch / description | ✅ Draft in [docs/PITCH.md](docs/PITCH.md): fill in the [BRACKETS] |
 | Demo video under 2 minutes, public URL | ⬜ Script in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) |
+| Azure set-up: OpenAI, Event Hubs, Container Apps | ⬜ Step-by-step in [docs/AZURE.md](docs/AZURE.md). Nothing tested against a real subscription yet |
 | Real Azure OpenAI run (key, endpoint, deployment in `.env`) | ⬜ Not tested yet: only fakes and templates |
 | Real Azure Event Hubs run | ⬜ Optional, not tested yet |
 | Dashboard reviewed in a browser | ⬜ Tested headless only |
@@ -98,7 +105,10 @@ streamlit run src/app.py
 # 8. Tests
 python -m pytest tests -q
 
-# 9. Optional: the production path through Azure Event Hubs (needs the two EVENTHUB_ settings in .env)
+# 9. Player layer and auto-eventing prototype
+python src/autoevent.py --seed 7
+
+# 10. Optional: the production path through Azure Event Hubs (needs the two EVENTHUB_ settings in .env)
 python src/streamer.py --data data --match 1 --speed 30 --publish eventhubs   # terminal 1: publisher
 python src/run_live.py --source eventhubs --match 1 --speed 0                 # terminal 2: engine and stories
 ```
@@ -148,12 +158,16 @@ momentum-engine/
 │   ├── streamer.py           # replays events.csv as a paced live feed
 │   ├── live.py               # LiveSession: streamer -> engine -> narrator in a background thread
 │   ├── eventhub.py           # Azure Event Hubs publisher and live feed
-│   ├── narrator.py           # Writer (Azure OpenAI) + Verifier + template fallback
+│   ├── agents.py             # the newsroom: Director, Analyst, Writer, Verifier, Fallback, circuit breaker
+│   ├── players.py            # name tags, pass quality, ball speed, badges, player focus
+│   ├── autoevent.py          # auto-eventing prototype on synthetic ball tracking
+│   ├── narrator.py           # templates, number whitelist and verifier used by the agents
 │   ├── recap.py              # full-time recap, same pattern
 │   ├── run_live.py           # terminal demo
 │   ├── app.py                # Streamlit dashboard
 │   └── validate_engine.py    # grades the live engine against truth, mean ± sd over seeds
-├── docs/PITCH.md, docs/DEMO_SCRIPT.md   # submission pitch and demo video script
+├── docs/                     # PITCH.md, DEMO_SCRIPT.md, AZURE.md (set-up guide)
+├── Dockerfile                # dashboard image for Azure Container Apps
 ├── tests/                    # pytest: engine, streamer, narrator, verifier, fallback, recap, Event Hubs, dashboard
 ├── results/                  # saved validation numbers (engine_validation.csv)
 ├── .env.example              # Azure OpenAI settings (copy to .env, never commit .env)
@@ -209,6 +223,7 @@ clubs are invented.
 | `receiver_id`, `receiver_name` | Intended receiver (passes only). This is what the entropy is built from |
 | `xg` | Expected-goals value of a shot (shots only) |
 | `under_pressure` | Whether the pass was made under a pressing action |
+| `ball_speed_kmh` | Measured ball speed in km/h (passes and shots only; synthetic) |
 | `home_score`, `away_score` | Score after this event |
 
 The event logic in brief: each step, the team in possession either **shoots** (only in the final quarter of the
@@ -445,30 +460,65 @@ for the dashboard.
 Combining dominance and chaos gives four states, per team:
 
 | | Lower entropy than opponent | Higher entropy than opponent |
-| ### Narration (`src/narrator.py`, `src/recap.py`)
-
-Two roles with different jobs, plus a safety net:
-
-| Role | What it does |
-| --- | --- |
-| **Writer** | An Azure OpenAI model writes one or two sentences from the moment's facts, for the viewer's mode (casual: warm, no numbers; analyst: numbers and the reason), language, favourite club and favourite player |
-| **Verifier** | Plain code checks the sentence: casual text has no numbers except the minute; analyst text uses only numbers that are in the facts. On failure the Writer gets the reason and one more try |
-| **Fallback** | Model missing, slow (8 s), erroring, or rejected twice: a template sentence (English, Hebrew, Spanish). Other languages fall back to English and say so |
-
-The model never blocks the stream: a card appears at once with the template sentence, and a worker thread upgrades it
-when the model answers (`live.py`). Changing mode or language re-tells the existing cards and the recap. The same
-Writer / Verifier / fallback pattern writes the full-time recap from the score, shots, xG and dominant spells
-("episodes", for example "Redcliffe Town were on top from 26' to 67'").
-
----
-
-| --- | --- |
+| --- | --- | --- |
 | **Winning momentum** | Controlled dominance | Chaotic pressure |
 | **Losing momentum** | Being read | Scrambling |
 
---- | --- | --- |
-| **Winning momentum** | Controlled dominance | Chaotic pressure |
-| **Losing momentum** | Being read | Scrambling |
+### Players, pass quality and ball speed (`src/players.py`)
+
+A second layer, per player, updated one event at a time. It covers the "real-time match intelligence" items of the brief:
+
+| Brief item | What we do |
+| --- | --- |
+| Player identification | Every event gets a timed, machine-readable **name tag** (`overlay`): player, position, team, event, metrics and badges. The dashboard shows them as "Player tags" |
+| Pass distance, accuracy, difficulty | Distance in metres from the pitch coordinates; accuracy per player; a **difficulty rating 0 to 100** from pass length (up to 40), forward progress (20), ending in the final third (15, plus 10 if it starts outside), and pressure (20) |
+| Ball speed and shot speed | The `ball_speed_kmh` column of the feed (new in `events.csv`: passes and shots) |
+| Indicators when thresholds are reached | Badges: **long pass** (35 m or more), **hard pass** (completed, difficulty 70 or more), **fast ball** (75 km/h or more), **power shot** (105 km/h or more), **goal**, **big chance** (xG 0.3 or more), **passing milestone** (25th, 50th, 75th, 100th completed pass) |
+| Player-focused mode | The viewer names a player. Moments about that player (`player_focus`: shot, long pass, hard pass, fast ball, power shot, milestone) appear as cards, with a stats panel: passes, accuracy, shots, longest pass, top ball speed. At most one per minute; goals keep their own `goal` moment |
+
+Not here: running speed and distance covered by a player. The feed has no player tracking, only where each event
+happened, and we did not invent those numbers. The speed and distance indicators are about the ball and the passes.
+
+The ball speeds are synthetic: they come from a separate random stream in the generator (passes: faster when longer;
+shots: faster from range), so adding them did not change any other column. All earlier validation numbers still hold.
+
+### Auto-eventing prototype (`src/autoevent.py`)
+
+The brief mentions a model that runs over a video feed to produce pass and speed metrics automatically. We have no video, so
+this is a **prototype of that stage on a synthetic ball-tracking feed**: `make_tracking` builds a noisy 10 Hz ball track
+(position, and who holds the ball) from a synthetic match; `detect_passes` finds every flight of the ball from the track alone and
+computes distance, ball speed and outcome. Run `python src/autoevent.py --seed 7`. On seed 7 with 0.35 m of tracking noise:
+87% of passes found, 92% of detections are real passes, outcome and receiver 100% right, distance error 0.4 m, ball-speed
+error 2.6 km/h (6.2 km/h with 1 m of noise). Limits: the track is built from the events, so detection is circular; shots are
+not detected; real video would need a vision model that outputs the same `{t, x, y, holder}` frames.
+
+### Narration: a team of agents (`src/agents.py`, `src/narrator.py`, `src/recap.py`)
+
+Each key moment goes through a small newsroom. Every agent has one job; they share one state (the **Blackboard**), hand work
+on, and recover from failures. Every step is recorded in a **trace** that analyst mode shows under each card.
+
+| Agent | Kind | Job |
+| --- | --- | --- |
+| **Director** | code | Decides how much the moment matters *for this viewer*: base priority by type, +0.2 if it is about the followed club, +0.3 if it names the followed player. Sets the story length (2 sentences if priority is 0.7 or more, else 1) and the angle |
+| **Analyst** | model | Writes the tactical "why it matters" note from the facts only. Its note is checked like any text; a rule-based note is used if the model fails or invents a number |
+| **Writer** | model | Writes the story in the viewer's mode (casual: warm, no numbers; analyst: numbers and the reason), language, club and player, from the plan and the note |
+| **Verifier** | code | Checks the draft: casual text has no numbers except the minute; analyst numbers must be in the facts; the text must use the language's own letters (Hebrew, Arabic); the followed player may be named only if the facts name them; length. On failure it sends the draft back with the reason (one retry) |
+| **Fallback** | code | A template sentence (English, Hebrew, Spanish) when the model is missing, slow, failing or rejected twice. Other languages fall back to English and say so |
+
+Failure recovery: a model call that errors or takes longer than 8 seconds counts as a failure; after **3 failures in a
+row a circuit breaker stops calling the model for 30 seconds** (the dashboard says so), then tries again. An agent that
+raises an exception is recorded as an error and the next agent carries on. The full-time recap has its own short
+pipeline (Segmenter → Writer+Verifier → Fallback) built from the score, shots, xG and dominant spells.
+
+Why several agents: the creative part (Writer) is never the part that decides what is true (Verifier), the Director makes the
+same moment come out differently for different viewers, and every step can fail without stopping a live broadcast. A single
+prompt cannot give that guarantee.
+
+The model never blocks the stream: a card appears at once with a template sentence, and a worker thread upgrades it when the
+agents finish (`live.py`). Changing mode, language, club or player re-tells the existing cards and the recap.
+
+This is our own lightweight orchestration, **not** Microsoft Agent Framework or A2A. The Blackboard and the one-method agent
+interface map directly onto such a framework (each agent an executor, the Newsroom the workflow), but we have not done that port.
 
 ---
 
@@ -555,11 +605,16 @@ may prefer fewer, surer moments).
 | (d) Render on screen | `app.py` Streamlit dashboard; key moments are timed, machine-readable JSON that an overlay renderer could use |
 | (e) Personalize | Casual vs analyst experience (different layout and text), favourite club, favourite player, language |
 | (iii) Narrative generation | `narrator.py` stories and `recap.py` full-time recap |
-| (iv) Explainability | "Why it matters" panel in analyst mode; Verifier that blocks invented numbers |
+| (iv) Explainability | "Why it matters" panel and agent trace in analyst mode; Analyst note; Verifier that blocks invented numbers |
+| (ii) Player identification | `players.py` name tags (timed overlays) with threshold badges |
+| (ii) Pass quality | Distance (m), accuracy per player, difficulty rating 0 to 100 |
+| (ii) Speed metrics | Ball speed and shot speed (`ball_speed_kmh`), power-shot and fast-ball badges |
+| (ii) Auto-eventing | `autoevent.py` prototype on synthetic ball tracking (no real video) |
+| (e) Player-focused mode | Follow a player: `player_focus` cards and a stats panel |
 | (v) Data innovation | This generator, with hidden ground truth for validation |
 | (vi) Multi-language | Model writes in any supported language; template fallback in en, he, es |
 
-Not covered: player identification overlays, ball and shot speed, auto-eventing from video.
+Not covered: player running speed and distance (the feed has no player tracking), and auto-eventing from real video (prototype on synthetic tracking only).
 
 ---
 
@@ -623,7 +678,12 @@ Not covered: player identification overlays, ball and shot speed, auto-eventing 
   not reviewed in a browser.
 - **Event Hubs is tested with fakes only.** The JSON round trip, partition key (one match per partition) and
   end-of-match message are tested; a real namespace has not been used.
-- **Not covered from the brief:** player identification overlays, ball and shot speed, auto-eventing from video.
+- **Not covered from the brief:** player running speed and distance covered (no player tracking in the feed), and
+  auto-eventing from real video. The auto-eventing prototype runs on a synthetic track built from the events, so its
+  detection score is circular; the useful part is how well speed and distance survive noise.
+- **The agents are our own orchestration**, not Microsoft Agent Framework or A2A, and the model-using agents (Analyst,
+  Writer) are tested with a scripted fake model only.
+- **Ball speeds are synthetic** (a separate random stream in the generator), so they say nothing about real football.
 - **Templates only for en, he, es.** Other languages need the model.
 - **Simplified football:** no set pieces, fouls, cards, substitutions or offsides yet.
 

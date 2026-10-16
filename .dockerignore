@@ -1,0 +1,12 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.env
+data
+figures
+results
+tests
+docs
+notebooks

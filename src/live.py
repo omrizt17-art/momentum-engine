@@ -12,12 +12,15 @@ sentence, and a worker thread upgrades it when the model answers.
 
 import sys  # to find sibling modules
 import threading  # background threads
+from collections import deque  # recent items for the screen
 from concurrent.futures import ThreadPoolExecutor  # model calls in the background
 from pathlib import Path  # file paths
 
 sys.path.insert(0, str(Path(__file__).parent))  # let us import files from src/
+from agents import Newsroom  # the team of agents that writes the stories
 from metrics import Engine  # the live engine
-from narrator import Narrator, template_text  # one-line stories
+from narrator import Narrator, template_text  # fallback sentences and viewer settings
+from players import PlayerTracker  # name tags, pass quality, ball speed, player focus
 from streamer import stream_events  # paced replay
 
 MIN_EPISODE = 3  # a dominant spell shorter than this many minutes is not an "episode"
@@ -41,6 +44,10 @@ class LiveSession:
         self.speed = speed
         self.narrator = narrator or Narrator(client=None)
         self.engine = engine or Engine()
+        self.newsroom = Newsroom(client=self.narrator.client)  # Director, Analyst, Writer, Verifier, Fallback
+        self.players = PlayerTracker(focus=self.narrator.fav_player)
+        self.ticker = deque(maxlen=14)  # latest name tags (every event)
+        self.notable = deque(maxlen=30)  # name tags that reached a threshold (long pass, hard pass, fast ball, power shot, ...)
         self.lock = threading.RLock()  # guards everything below
         self.stop_flag = threading.Event()
         self.pool = ThreadPoolExecutor(max_workers=2)
@@ -71,6 +78,8 @@ class LiveSession:
                 if val is not None and getattr(self.narrator, name) != val:
                     setattr(self.narrator, name, val)
                     changed = True
+            if fav_player is not None:
+                self.players.focus = fav_player or None
             cards = list(self.cards) if changed else []
             redo_recap = changed and self.finished
         for c in cards:
@@ -83,17 +92,27 @@ class LiveSession:
         with self.lock:
             return {"snapshot": dict(self.snapshot), "history": list(self.history), "cards": [dict(c) for c in self.cards],
                     "totals": {t: dict(v) for t, v in self.totals.items()}, "finished": self.finished, "error": self.error,
-                    "recap": self.recap, "names": dict(self.engine.names), "episodes": episodes(self.history)}
+                    "recap": self.recap, "names": dict(self.engine.names), "episodes": episodes(self.history),
+                    "ticker": list(self.ticker), "notable": list(self.notable), "breaker_open": self.newsroom.breaker.is_open,
+                    "top_players": {t: self.players.top(5, t) for t in ("home", "away")}, "focus_player": self._focus_stats()}
 
     # ----- internals -----
 
-    def _tell(self, card):  # narrate one card (runs in the worker pool)
+    def _profile(self):
+        n = self.narrator
+        return {"mode": n.mode, "language": n.language, "fav_club": n.fav_club, "fav_player": n.fav_player}
+
+    def _focus_stats(self):
+        pid = self.players.find(self.players.focus)
+        return self.players.stats(pid) if pid else None
+
+    def _tell(self, card):  # narrate one card with the Newsroom (runs in the worker pool)
         with self.lock:
-            nar = Narrator(self.narrator.mode, self.narrator.language, self.narrator.fav_club, self.narrator.fav_player, client=self.narrator.client)
-        r = nar.narrate(card["moment"])
+            profile = self._profile()
+        r = self.newsroom.process(card["moment"], profile)
         with self.lock:
             if (r["mode"], r["language"]) == (self.narrator.mode, self.narrator.language) or r["source"] == "template":  # ignore answers for an old setting
-                card.update(text=r["text"], source=r["source"], note=r["note"], pending=False)
+                card.update(text=r["text"], source=r["source"], note=r["note"], pending=False, trace=r["trace"], plan=r["plan"], analysis=r["analysis"])
 
     def _run(self):
         try:
@@ -102,6 +121,8 @@ class LiveSession:
                 if self.stop_flag.is_set():
                     break
                 moments = self.engine.update(ev)
+                overlay, focus = self.players.update(ev)
+                moments = moments + [self.engine.moment("player_focus", f["team"], f["timestamp_s"], f["drivers"], f["facts"]) for f in focus]
                 self._count(ev)
                 minute = int(ev["timestamp_s"] // 60)
                 with self.lock:
@@ -112,8 +133,11 @@ class LiveSession:
                                              "away_chaos": s["away"]["chaos"], "home_entropy": s["home"]["entropy"], "away_entropy": s["away"]["entropy"],
                                              "score_home": s["score"]["home"], "score_away": s["score"]["away"]})
                         last_minute = minute
+                    self.ticker.append(overlay)
+                    if overlay["badges"]:
+                        self.notable.append(overlay)
                     for m in moments:
-                        card = {"id": len(self.cards), "moment": m, "pending": True, "source": "template", "note": "",
+                        card = {"id": len(self.cards), "moment": m, "pending": True, "source": "template", "note": "", "trace": [], "plan": None, "analysis": None,
                                 "text": template_text(m, self.narrator.mode, self.narrator.language if self.narrator.language in ("en", "he", "es") else "en")}
                         self.cards.append(card)
                         self.pool.submit(self._tell, card)
@@ -138,8 +162,7 @@ class LiveSession:
         self.pool.submit(self._make_recap)
 
     def _make_recap(self):
-        from recap import build_recap  # imported here: recap imports episodes() from this module
         v = self.view()
-        r = build_recap(v, self.narrator)
+        r = self.newsroom.recap(v, self._profile())
         with self.lock:
             self.recap = r

@@ -43,6 +43,9 @@ T = {
         "reason": {"high_regain": "{n} high regains to {m}", "shot": "{n} shots to {m}", "ft_pass": "{n} final-third passes to {m}", "pressure": "{n} pressing actions to {m}",
                    "less_predictable": "less predictable passing", "more_predictable": "more predictable passing"},
         "and": " and ",
+        "player_focus": {"casual": "{player} is involved again: {kind_casual}.", "analyst": "{minute}': {player}, {kind_label}{metrics}."},
+        "kind_casual": {"shot": "he has a go at goal", "long_pass": "a lovely long ball", "hard_pass": "a difficult pass pulled off", "fast_ball": "a rocket of a pass", "power_shot": "a thunderous strike", "milestone": "another calm passing display", "big_chance": "a big chance"},
+        "kind_label": {"shot": "shot", "long_pass": "long pass", "hard_pass": "hard pass", "fast_ball": "fast ball", "power_shot": "power shot", "milestone": "passing milestone", "big_chance": "big chance"},
     },
     "he": {
         "goal": {"casual": "גול! {team} מבקיעה והקהל משתגע.", "analyst": "דקה {minute}: שער ל{team}, מבקיע: {player} (xG {xg:.2f}). תוצאה {home}-{away}."},
@@ -54,6 +57,9 @@ T = {
         "reason": {"high_regain": "{n} חטיפות גבוהות מול {m}", "shot": "{n} בעיטות מול {m}", "ft_pass": "{n} מסירות לשליש האחרון מול {m}", "pressure": "{n} לחצים מול {m}",
                    "less_predictable": "מסירות פחות צפויות", "more_predictable": "מסירות צפויות יותר"},
         "and": " ו",
+        "player_focus": {"casual": "{player} שוב במרכז העניינים: {kind_casual}.", "analyst": "דקה {minute}: {player}, {kind_label}{metrics}."},
+        "kind_casual": {"shot": "בועט לשער", "long_pass": "כדור ארוך ויפה", "hard_pass": "מסירה קשה שהצליחה", "fast_ball": "מסירה כמו טיל", "power_shot": "בעיטה רועמת", "milestone": "עוד משחק מסירות רגוע", "big_chance": "הזדמנות גדולה"},
+        "kind_label": {"shot": "בעיטה", "long_pass": "מסירה ארוכה", "hard_pass": "מסירה קשה", "fast_ball": "כדור מהיר", "power_shot": "בעיטה חזקה", "milestone": "ציון דרך במסירות", "big_chance": "הזדמנות גדולה"},
     },
     "es": {
         "goal": {"casual": "¡GOL! {team} marca y el estadio estalla.", "analyst": "Min. {minute}: gol de {team}, anota {player} (xG {xg:.2f}). Marcador {home}-{away}."},
@@ -65,6 +71,9 @@ T = {
         "reason": {"high_regain": "{n} recuperaciones altas contra {m}", "shot": "{n} tiros contra {m}", "ft_pass": "{n} pases al último tercio contra {m}", "pressure": "{n} presiones contra {m}",
                    "less_predictable": "pases menos previsibles", "more_predictable": "pases más previsibles"},
         "and": " y ",
+        "player_focus": {"casual": "{player} otra vez protagonista: {kind_casual}.", "analyst": "Min. {minute}: {player}, {kind_label}{metrics}."},
+        "kind_casual": {"shot": "prueba suerte", "long_pass": "un bonito pase largo", "hard_pass": "un pase difícil que sale bien", "fast_ball": "un pase como un cohete", "power_shot": "un disparo potente", "milestone": "otra tarde tranquila de pases", "big_chance": "una gran ocasión"},
+        "kind_label": {"shot": "disparo", "long_pass": "pase largo", "hard_pass": "pase difícil", "fast_ball": "pase muy rápido", "power_shot": "disparo potente", "milestone": "hito de pases", "big_chance": "gran ocasión"},
     },
 }
 
@@ -85,7 +94,12 @@ def template_text(moment, mode, lang):  # a simple, always-available sentence
     kind = moment["type"]
     state = moment.get("state") or "balanced"
     facts = moment.get("facts") or {}
-    text = t[kind][mode].format(
+    kind_key = facts.get("kind", "")
+    pm = facts.get("metrics") or {}
+    metrics = "".join([f", {pm['distance_m']:.0f} m" if "distance_m" in pm else "", f", {pm['ball_speed_kmh']:.0f} km/h" if "ball_speed_kmh" in pm else "",
+                       f", difficulty {pm['difficulty']}" if "difficulty" in pm and lang == "en" else f", {pm['difficulty']}" if "difficulty" in pm else ""])
+    text = t[kind][mode].format(kind_casual=t["kind_casual"].get(kind_key, ""), kind_label=t["kind_label"].get(kind_key, ""), metrics=metrics if mode == "analyst" else "",
+        
         team=moment.get("team_name") or moment["team"], minute=moment["elapsed_minute"], mom=moment["momentum"],
         home=moment["score"]["home"], away=moment["score"]["away"], player=facts.get("player", ""), xg=facts.get("xg", 0.0), reasons=_reasons(moment, lang),
         style_casual=t["style_casual"].get(state, ""), state_name=t["state_name"].get(state, state))
@@ -97,12 +111,27 @@ def template_text(moment, mode, lang):  # a simple, always-available sentence
 NUM = re.compile(r"\d+(?:[.,]\d+)?")
 
 
+def _flat_numbers(o):  # every number inside nested facts, in the forms a sentence may use
+    if isinstance(o, bool):
+        return
+    if isinstance(o, (int, float)):
+        x = abs(float(o))
+        yield from {str(int(x)), f"{x:.1f}", f"{x:.2f}", str(int(round(x))), str(int(x + 0.5))}
+    elif isinstance(o, dict):
+        for v in o.values():
+            yield from _flat_numbers(v)
+    elif isinstance(o, (list, tuple)):
+        for v in o:
+            yield from _flat_numbers(v)
+
+
 def allowed_numbers(moment):  # every number a truthful sentence may contain
     nums = {str(moment["elapsed_minute"]), str(moment["score"]["home"]), str(moment["score"]["away"])}
     for x in (moment["momentum"], moment.get("chaos_diff", 0)):
         nums |= {f"{abs(x):.1f}", f"{abs(x):.2f}", str(int(abs(x)))}
     for pair in ((moment.get("facts") or {}).get("counts") or {}).values():
         nums |= {str(v) for v in pair}
+    nums |= set(_flat_numbers(moment.get("facts")))
     nums.add(str((moment.get("facts") or {}).get("window_min", 5)))
     if "xg" in (moment.get("facts") or {}):
         nums.add(f"{moment['facts']['xg']:.2f}")
