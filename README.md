@@ -36,8 +36,10 @@ Key moments are turned into short AI-written insights, written differently for a
 | --- | --- | --- | --- |
 | Synthetic match generator | `src/generate_matches.py` | A | ✅ Done |
 | Offline analysis + validation | `src/analyze_data.py` | A | ✅ Done |
-| Live event streamer | `src/streamer.py` | A | ⬜ Next |
-| Incremental metrics engine (momentum, entropy, states, key moments) | `src/metrics.py` | A | ⬜ Next |
+| Metric tuning and full offline evaluation | `src/tune_metrics.py`, `src/evaluate.py` | A | ✅ Done |
+| Live event streamer | `src/streamer.py` | A | ✅ Done (local queue; Azure Event Hubs not wired yet) |
+| Incremental metrics engine (momentum, entropy, chaos index, states, key moments) | `src/metrics.py` | A | ✅ v1 done |
+| Engine validation (mean ± sd over seeds) | `src/validate_engine.py` | A | ✅ Done |
 | AI narration (Azure OpenAI, casual / analyst, languages) | `src/narrator.py` | B | ⬜ Next |
 | Dashboard (Streamlit) | `src/app.py` | B | ⬜ Later |
 
@@ -59,6 +61,12 @@ python src/generate_matches.py --matches 10 --seed 42 --out data
 
 # 3. Analyse them: summary table + plots into figures/
 python src/analyze_data.py --data data --match 1 --out figures
+
+# 4. Replay match 1 as a live stream through the engine (30x speed; use --speed 0 for no waiting)
+python src/streamer.py --data data --match 1 --speed 30 --jsonl moments.jsonl
+
+# 5. Grade the engine against the hidden truth on fresh matches (a few minutes)
+python src/validate_engine.py --seeds 4 --matches 20
 ```
 
 Options:
@@ -68,6 +76,12 @@ Options:
 | `generate_matches.py` | `--matches` | 10 | How many matches to simulate |
 | | `--seed` | 42 | Random seed. Same seed = identical data, so we can both reproduce results |
 | | `--out` | `data` | Output folder |
+| `streamer.py` | `--data` | `data` | Folder made by the generator (only `events.csv` is read) |
+| | `--match` | 1 | Which match to replay |
+| | `--speed` | 30 | 30 = 30x real time, 0 = no waiting |
+| | `--jsonl` | none | Also write key moments to this file, one JSON object per line |
+| `validate_engine.py` | `--seeds` / `--matches` | 5 / 20 | Independent batches, and matches per batch |
+| | `--first-seed` | 1000 | Keep away from the tuning seed (123) |
 | `analyze_data.py` | `--data` | `data` | Folder made by the generator |
 | | `--match` | 1 | Which match to plot in detail |
 | | `--out` | `figures` | Output folder |
@@ -82,7 +96,12 @@ Options:
 momentum-engine/
 ├── src/
 │   ├── generate_matches.py   # simulates matches, writes data/
-│   └── analyze_data.py       # metrics, plots and validation, writes figures/
+│   ├── analyze_data.py       # offline metrics, plots and validation, writes figures/
+│   ├── tune_metrics.py       # grid search and weight fit against the hidden truth (fresh seed)
+│   ├── evaluate.py           # full offline evaluation tables (offline metrics)
+│   ├── metrics.py            # the live engine: momentum, entropy, chaos index, states, key moments
+│   ├── streamer.py           # replays events.csv as a live feed and runs the engine
+│   └── validate_engine.py    # grades the live engine against truth, mean ± sd over seeds
 ├── docs/img/                 # example figures used in this README
 ├── notebooks/                # exploration only; finished code moves to src/
 ├── requirements.txt
@@ -314,12 +333,61 @@ where pᵢ is the share of passes going through pair i. It is scaled to 0–1 by
 
 Relative entropy (team minus opponent) is the planned "control vs chaos" axis.
 
-### Match state (planned)
+### Live engine (`src/metrics.py`)
 
-Combining the two gives four states:
+The engine reads **one event at a time** and keeps a small, fixed amount of state. It never reads a `truth_*.csv`.
+The offline versions above stay in `analyze_data.py` for the plots; the live versions differ as follows.
+
+**Momentum (live).** Threat points are *time-decayed* (half-life 1.5 minutes) instead of a hard window, so one event
+updates the value in O(1). The weights come from a least-squares fit of the hidden regime (`tune_metrics.py`, seed 123):
+completed pass into the final third 1.1, high regain 0.6, shot 3.0, pressing action 2.2. The fit found no use for a
+penalty on lost passes (weight 0). Dominance uses **two thresholds** (hysteresis): a team becomes dominant above 6 points
+per minute and stays dominant until momentum falls below 3. This stops the state flickering, so the narrator is not
+flooded with false "momentum shifted" moments.
+
+**Pass entropy (live).** Same Tsallis entropy (q = 0.2) of passer-to-receiver pairs, but over an **exponential-decay
+window** (a pass loses half its weight after 25 of the team's completed passes) instead of "the last 40 passes", so there
+is no jump when an old pass leaves the window. The value is also read **against the team's own average in this match**
+(`entropy_rel`), which removes the fixed difference between teams (`style_alpha`) and keeps only change within the match.
+The baseline starts after 40 completed passes (about 10 minutes), so there is no chaos reading before that.
+
+**Chaos index.** The mean of three z-scores, each against the team's own match baseline: pass entropy, spread of pass
+length (`end_x - x`) and sideways spread (`end_y - y`). Higher = less predictable play. Completion rate is **not** in the
+index: it also falls when a team is dominated (72% vs 78%), so it would mix up "chaotic" with "being pushed back". Spread
+of pass length and direction are plausible chaos signals in real football too, not only in this generator.
+
+**Match state (live).** The four-cell table below, computed for each team. "More chaotic than the opponent" uses a dead
+band (0.25) and can change at most once every 3 minutes, so the label is stable.
+
+**Key moments.** Three types, as JSON for the narrator:
+- `goal`
+- `momentum_shift`: a team enters the dominant state (never in the first 3 minutes)
+- `style_change`: the dominant team's quadrant changes (control and chaos swap)
+
+Each one carries `drivers`: plain-language reasons from the last 5 minutes. This replaces the draft in "Working
+together" (same fields, plus `timestamp_s` and `chaos_diff`):
+
+```json
+{"match_id": 1, "elapsed_minute": 42, "timestamp_s": 2547.3, "type": "momentum_shift",
+ "team": "away", "team_name": "Redcliffe Town", "momentum": -6.0, "state": "controlled_dominance",
+ "chaos_diff": -0.27, "drivers": ["21 completed passes into the final third vs 2 in 5 min",
+ "5 high regains vs 3 in 5 min", "more predictable passing than the opponent"],
+ "score": {"home": 0, "away": 1}}
+```
+
+`Engine.snapshot()` returns the current momentum, state, entropy, `entropy_rel`, chaos index and quadrant of each team,
+for the dashboard.
+
+### Match state
+
+Combining dominance and chaos gives four states, per team:
 
 | | Lower entropy than opponent | Higher entropy than opponent |
 | --- | --- | --- |
+| **Winning momentum** | Controlled dominance | Chaotic pressure |
+| **Losing momentum** | Being read | Scrambling |
+
+--- | --- | --- |
 | **Winning momentum** | Controlled dominance | Chaotic pressure |
 | **Losing momentum** | Being read | Scrambling |
 
@@ -339,7 +407,46 @@ Seed 42, 10 matches:
 Numbers vary with the seed (another run gave 0.77 for momentum and 0.41 for entropy), so compare methods over several
 seeds.
 
-**Momentum tracks the hidden regime.** Background shading = the hidden dominant team; the black line = our momentum.
+**Live engine, graded on fresh matches** (`validate_engine.py`, 4 seeds x 20 matches, seeds 2000-2003, never used for
+tuning; mean ± sd across seeds):
+
+| Check | Result | Note |
+| --- | --- | --- |
+| Momentum vs hidden regime (correlation) | 0.81 ± 0.02 | |
+| Dominance state (with hysteresis) correct | 76% ± 2 of minutes | Most-common-state baseline about 42% |
+| Real switches caught within 3 minutes | 79% ± 2 (median lag 2 min) | Switches into a dominant state that lasts 5+ minutes |
+| `momentum_shift` moments that match a real switch | 58% ± 4 precision, 85% ± 4 recall | About 7.4 shifts per match |
+| Momentum predicts shot difference in the next 3 min | r = 0.48 ± 0.03 | A naive "shots in the last 3 min" gives 0.35 |
+| Chaos: decay-window entropy, raw | AUC 0.63 ± 0.04 | Hard 40-pass window on the same minutes: 0.71 |
+| Chaos: decay-window entropy vs own baseline | AUC 0.71 ± 0.04 | Same as the old raw window |
+| Chaos: composite chaos index | **AUC 0.83 ± 0.01** | 0.5 = no signal, 1.0 = perfect |
+| Chaos index vs hidden dominance | r = -0.16 ± 0.05 | Confound check: should be 0. Small but not zero |
+
+**Offline version vs live engine**, same four batches (`evaluate.py` for the offline numbers: 3-minute window, pass
+weight 0.5, threshold 5, last 40 passes):
+
+| Measure | Offline (`analyze_data.py` settings) | Live engine (`metrics.py`) |
+| --- | --- | --- |
+| Momentum r | 0.75 ± 0.04 | **0.81 ± 0.02** |
+| Dominance accuracy | 72% ± 2 | **76% ± 2** |
+| Caught within 3 min | **91% ± 2** | 79% ± 2 |
+| Median lag | 2 min | 2 min |
+| Chaos AUC | 0.71 ± 0.04 (all minutes) | **0.83 ± 0.01** (after the 10-minute warm-up) |
+
+Two caveats on this comparison. The offline state has no hysteresis, so it reacts faster but flips more often; its
+`momentum_shift` precision was not measured. The live chaos AUC leaves out the first 10 minutes, while the offline AUC
+includes them (on the same post-warm-up minutes the old entropy scores 0.71, the same).
+
+How to read this honestly:
+- **The decay window alone did not help.** Raw, it is worse than the hard 40-pass window (0.63 vs 0.71), because it is
+  more exposed to the fixed style difference between teams. Reading it against the team's own baseline brings it back
+  to the old level. **The real gain comes from the composite chaos index** (0.71 to 0.83), which uses extra signals.
+- Precision of `momentum_shift` is the weak point. The thresholds (6 and 3) were chosen on seed 1000 as a compromise:
+  lower thresholds catch switches faster (lag 1 minute) but give about 12 moments per match with 49% precision.
+- Momentum weights were fitted on the generator, so the 0.81 is partly "we recovered what we put in" (see Known
+  limitations). The shot-prediction row is the less circular check, but the generator also links regime to shots.
+
+**Offline analysis (first version).** Momentum tracks the hidden regime. Background shading = the hidden dominant team; the black line = our momentum.
 Bottom panel: each team's rolling pass entropy; strips = minutes the team was secretly playing chaotically.
 
 ![Match 1 timeline](docs/img/timeline_match1.png)
@@ -352,8 +459,9 @@ Bottom panel: each team's rolling pass entropy; strips = minutes the team was se
 
 ![Passing network](docs/img/network_match1_home.png)
 
-**What to improve next:** entropy is the weak link. Ideas: compare each team to its own match baseline instead of
-an absolute level, try a longer window or smoothing, and tune `q`.
+**What to improve next:** test the engine on real event data (for example StatsBomb open data, which has passer and
+receiver) and check whether momentum predicts shots there; make the chaos index less correlated with dominance; wire
+the streamer to Azure Event Hubs.
 
 ---
 
@@ -417,6 +525,12 @@ an absolute level, try a longer window or smoothing, and tune `q`.
 - **Entropy evidence is season-level:** Neuman et al. linked entropy to final league position over a season.
   Nobody has shown it works minute to minute; we present it as "inspired by", not proven.
 - **Short windows are noisy:** 40 passes is a small sample, and q = 0.2 amplifies rare passes.
+- **Fitted weights:** the momentum weights come from a least-squares fit on this generator. They show the method works,
+  not that these weights suit real football.
+- **Chaos is partly confounded with dominance** (r = -0.16): when a team is pushed back its passes clip at the pitch
+  edge, so their length spread shrinks. Small, but it is there.
+- **Key-moment precision is 58%:** some `momentum_shift` moments are early or brief. The thresholds trade speed for
+  precision.
 - **Simplified football:** no set pieces, fouls, cards, substitutions or offsides yet.
 
 ---
