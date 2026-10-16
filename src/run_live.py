@@ -3,6 +3,7 @@
 Usage:
   python src/run_live.py --data data --match 1 --speed 60 --mode analyst --lang he
   python src/run_live.py --simulate --seed 7 --speed 0          # no data/ folder needed: simulate a match in memory
+  python src/run_live.py --source eventhubs --match 1 --speed 0 # read a match that streamer.py --publish eventhubs is sending
 """
 
 import argparse  # read command-line options
@@ -27,6 +28,7 @@ def main():
     ap.add_argument("--data", default="data", help="folder made by generate_matches.py")
     ap.add_argument("--match", type=int, default=1)
     ap.add_argument("--simulate", action="store_true", help="simulate a match in memory instead of reading --data")
+    ap.add_argument("--source", choices=["data", "eventhubs"], default="data", help="where events come from (eventhubs: already paced by the publisher, use --speed 0)")
     ap.add_argument("--seed", type=int, default=7, help="seed for --simulate")
     ap.add_argument("--speed", type=float, default=60.0, help="60 = one minute per second, 0 = no waiting")
     ap.add_argument("--mode", default="casual", choices=["casual", "analyst"])
@@ -35,7 +37,11 @@ def main():
     ap.add_argument("--player", default=None)
     args = ap.parse_args()
 
-    events = simulated_events(args.seed) if args.simulate else load_events(args.data, args.match)
+    if args.source == "eventhubs":
+        from eventhub import EventHubFeed  # optional dependency
+        events = EventHubFeed(args.match)  # an iterator of event dicts
+    else:
+        events = simulated_events(args.seed) if args.simulate else load_events(args.data, args.match)
     client = make_client()
     print("Narrator:", "Azure OpenAI (with template fallback)" if client else "templates only (no Azure OpenAI settings found)")
     s = LiveSession(events, args.speed, Narrator(args.mode, args.lang, args.club, args.player, client=client)).start()

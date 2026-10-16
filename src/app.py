@@ -15,6 +15,7 @@ import streamlit as st  # the dashboard
 
 sys.path.insert(0, str(Path(__file__).parent))  # let us import files from src/
 from live import LiveSession  # the live path
+from eventhub import EventHubFeed, configured as eventhub_configured  # optional Azure Event Hubs source
 from narrator import LANGUAGES, Narrator, make_client  # stories
 from run_live import simulated_events  # one simulated match
 from streamer import load_events  # events from a data folder
@@ -43,9 +44,13 @@ def sim_events(seed):  # a simulated match, cached per seed
 
 with st.sidebar:
     st.header("Match")
-    source = st.radio("Source", ["Simulated match", "data/ folder"], horizontal=True)
+    sources = ["Simulated match", "data/ folder"] + (["Azure Event Hubs"] if eventhub_configured() else [])
+    source = st.radio("Source", sources, horizontal=True)
     if source == "Simulated match":
         seed = st.number_input("Match number (seed)", 1, 9999, 7)
+    elif source == "Azure Event Hubs":
+        hub_match = st.number_input("Match id", 1, 999, 1)
+        st.caption("Reads a match that `streamer.py --publish eventhubs` is sending. Speed is set by the publisher.")
     else:
         folder = st.text_input("Data folder", "data")
         match_id = st.number_input("Match id", 1, 999, 1)
@@ -66,8 +71,11 @@ if start:  # a new match
     if st.session_state.get("session"):
         st.session_state.session.stop()
     try:
-        events = sim_events(int(seed)) if source == "Simulated match" else load_events(folder, int(match_id))
-        st.session_state.session = LiveSession(events, float(speed), Narrator(mode, language, fav_club, fav_player, client=client)).start()
+        if source == "Azure Event Hubs":
+            events, play_speed = EventHubFeed(int(hub_match)), 0.0  # already paced by the publisher
+        else:
+            events, play_speed = (sim_events(int(seed)) if source == "Simulated match" else load_events(folder, int(match_id))), float(speed)
+        st.session_state.session = LiveSession(events, play_speed, Narrator(mode, language, fav_club, fav_player, client=client)).start()
     except Exception as e:
         st.error(f"Could not load the match: {e}")
 if stop and st.session_state.get("session"):

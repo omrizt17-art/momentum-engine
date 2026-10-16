@@ -5,6 +5,7 @@ It reads events.csv only. It never opens a truth_*.csv file, so the engine sees 
 Usage:
   python src/streamer.py --data data --match 1 --speed 30            # watch match 1 at 30x speed
   python src/streamer.py --data data --match 1 --speed 0 --jsonl moments.jsonl   # as fast as possible, save key moments
+  python src/streamer.py --data data --match 1 --speed 30 --publish eventhubs    # publish the paced feed to Azure Event Hubs (see eventhub.py)
 
 From other code (e.g. the dashboard) use the local queue, which is the fallback for Azure Event Hubs:
   q = start_queue_feed(events, speed=30)   # a thread fills a queue.Queue with events, then a final None
@@ -32,9 +33,11 @@ def load_events(data_dir, match_id):  # one match's events as plain dicts, in ev
 
 
 def stream_events(events, speed=1.0, sleep=time.sleep, clock=time.monotonic):  # yield events, waiting so that stream time passes `speed` times faster than real time
-    start = events[0]["timestamp_s"] if events else 0.0  # stream time of the first event
+    start = None  # stream time of the first event (events can be a list or a live iterator)
     t0 = clock()  # wall-clock reference
     for ev in events:  # each event
+        if start is None:
+            start = ev["timestamp_s"]
         if speed > 0:  # speed 0 = no waiting
             due = (ev["timestamp_s"] - start) / speed  # when this event is due, in wall-clock seconds
             wait = due - (clock() - t0)  # how long until then
@@ -68,9 +71,18 @@ def main():  # command-line entry point
     ap.add_argument("--match", type=int, default=1, help="match to replay")  # which match
     ap.add_argument("--speed", type=float, default=30.0, help="replay speed (30 = 30x real time, 0 = no waiting)")  # pacing
     ap.add_argument("--jsonl", default=None, help="also write key moments to this JSON-lines file")  # optional output
+    ap.add_argument("--publish", choices=["eventhubs"], default=None, help="publish the paced events to Azure Event Hubs instead of running the engine here")  # transport
     args = ap.parse_args()  # read options
 
     events = load_events(args.data, args.match)  # the feed
+    if args.publish == "eventhubs":  # producer side of the production path
+        from eventhub import EventHubPublisher  # optional dependency, imported only here
+        pub = EventHubPublisher()
+        for ev in stream_events(events, args.speed):  # paced events
+            pub.publish(ev)
+        pub.close()
+        print(f"Published {len(events)} events of match {args.match} to Event Hubs.")
+        return
     engine = Engine()  # fresh engine
     out = open(args.jsonl, "w", encoding="utf-8") if args.jsonl else None  # optional file
     last_minute = -1  # for the once-a-minute status line

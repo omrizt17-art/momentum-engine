@@ -37,7 +37,7 @@ Key moments are turned into short AI-written insights, written differently for a
 | Synthetic match generator | `src/generate_matches.py` | A | ✅ Done |
 | Offline analysis + validation | `src/analyze_data.py` | A | ✅ Done |
 | Metric tuning and full offline evaluation | `src/tune_metrics.py`, `src/evaluate.py` | A | ✅ Done |
-| Live event streamer | `src/streamer.py` | A | ✅ Done (local queue; Azure Event Hubs not wired yet) |
+| Live event streamer | `src/streamer.py` | A | ✅ Done (local queue; optional Azure Event Hubs publisher) |
 | Incremental metrics engine (momentum, entropy, chaos index, states, key moments) | `src/metrics.py` | A | ✅ v1 done |
 | Engine validation (mean ± sd over seeds) | `src/validate_engine.py` | A | ✅ Done |
 | Live session (streamer → engine → narrator in a background thread) | `src/live.py` | A + B | ✅ Done |
@@ -45,7 +45,24 @@ Key moments are turned into short AI-written insights, written differently for a
 | Full-time recap (same Writer / Verifier / fallback pattern) | `src/recap.py` | B | ✅ Done (same caveat) |
 | Terminal demo (backup if the dashboard fails) | `src/run_live.py` | B | ✅ Done |
 | Dashboard (Streamlit) | `src/app.py` | B | ✅ v1 done, tested headless; look and feel not yet reviewed in a browser |
-| Tests | `tests/` | A + B | ✅ 27 tests: no truth leak, no lookahead, determinism, streamer pace, verifier, fallback, recap |
+| Azure Event Hubs transport (publisher and live feed) | `src/eventhub.py` | A | ✅ Done, tested with fake producer and consumer. Not tested against a real namespace |
+| Tests | `tests/` | A + B | ✅ 37 tests: no truth leak, no lookahead, determinism, streamer pace, verifier, fallback, recap, Event Hubs (fakes), dashboard (headless) |
+
+---
+
+## Submission checklist
+
+Hackathon: Inside the Game (Microsoft x Premier League). Submissions close **27 October 2026**.
+
+| Item | Status |
+| --- | --- |
+| Public GitHub repository | ⬜ Currently private: make it public before submitting |
+| Pitch / description | ✅ Draft in [docs/PITCH.md](docs/PITCH.md): fill in the [BRACKETS] |
+| Demo video under 2 minutes, public URL | ⬜ Script in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) |
+| Real Azure OpenAI run (key, endpoint, deployment in `.env`) | ⬜ Not tested yet: only fakes and templates |
+| Real Azure Event Hubs run | ⬜ Optional, not tested yet |
+| Dashboard reviewed in a browser | ⬜ Tested headless only |
+| Everything in English (code, docs, UI) | ✅ The only non-English text is the optional Hebrew and Spanish template languages (brief item vi) |
 
 ---
 
@@ -80,6 +97,10 @@ streamlit run src/app.py
 
 # 8. Tests
 python -m pytest tests -q
+
+# 9. Optional: the production path through Azure Event Hubs (needs the two EVENTHUB_ settings in .env)
+python src/streamer.py --data data --match 1 --speed 30 --publish eventhubs   # terminal 1: publisher
+python src/run_live.py --source eventhubs --match 1 --speed 0                 # terminal 2: engine and stories
 ```
 
 **Narrator and Azure OpenAI.** Without settings, stories use built-in templates (English, Hebrew, Spanish) and everything
@@ -126,12 +147,14 @@ momentum-engine/
 │   ├── metrics.py            # the live engine: momentum, entropy, chaos index, states, key moments
 │   ├── streamer.py           # replays events.csv as a paced live feed
 │   ├── live.py               # LiveSession: streamer -> engine -> narrator in a background thread
+│   ├── eventhub.py           # Azure Event Hubs publisher and live feed
 │   ├── narrator.py           # Writer (Azure OpenAI) + Verifier + template fallback
 │   ├── recap.py              # full-time recap, same pattern
 │   ├── run_live.py           # terminal demo
 │   ├── app.py                # Streamlit dashboard
 │   └── validate_engine.py    # grades the live engine against truth, mean ± sd over seeds
-├── tests/                    # pytest: engine, streamer, narrator, verifier, fallback, recap
+├── docs/PITCH.md, docs/DEMO_SCRIPT.md   # submission pitch and demo video script
+├── tests/                    # pytest: engine, streamer, narrator, verifier, fallback, recap, Event Hubs, dashboard
 ├── results/                  # saved validation numbers (engine_validation.csv)
 ├── .env.example              # Azure OpenAI settings (copy to .env, never commit .env)
 ├── docs/img/                 # example figures used in this README
@@ -516,9 +539,9 @@ Bottom panel: each team's rolling pass entropy; strips = minutes the team was se
 
 ![Passing network](docs/img/network_match1_home.png)
 
-**What to improve next:** test the engine on real event data (for example StatsBomb open data, which has passer and
-receiver) and check whether momentum predicts shots there; make the chaos index less correlated with dominance; wire
-the streamer to Azure Event Hubs.
+**What to improve next:** run the engine on a second generator with different effects, to check it is not tuned to this
+one; test Azure OpenAI and Event Hubs against real resources; tune the key-moment hold time per audience (a studio
+may prefer fewer, surer moments).
 
 ---
 
@@ -526,7 +549,7 @@ the streamer to Azure Event Hubs.
 
 | Brief stage | Our component |
 | --- | --- |
-| (a) Ingest events as they happen | `streamer.py` plays events one at a time at a chosen speed into a local queue (Azure Event Hubs not wired yet) |
+| (a) Ingest events as they happen | `streamer.py` plays events one at a time at a chosen speed, into a local queue or Azure Event Hubs (`eventhub.py`) |
 | (b) Interpret into stats and patterns | `metrics.py`: momentum, entropy, chaos index, match state, big chances |
 | (c) Explain why a moment matters | Key moments with `drivers` and `facts`: "control vs chaos", pressing, regains, shots |
 | (d) Render on screen | `app.py` Streamlit dashboard; key moments are timed, machine-readable JSON that an overlay renderer could use |
@@ -598,6 +621,9 @@ Not covered: player identification overlays, ball and shot speed, auto-eventing 
   one retry, two rejections, error and timeout), and the templates are tested directly.
 - **The dashboard was tested headless** (no errors in casual and analyst mode, language switch). Layout and look were
   not reviewed in a browser.
+- **Event Hubs is tested with fakes only.** The JSON round trip, partition key (one match per partition) and
+  end-of-match message are tested; a real namespace has not been used.
+- **Not covered from the brief:** player identification overlays, ball and shot speed, auto-eventing from video.
 - **Templates only for en, he, es.** Other languages need the model.
 - **Simplified football:** no set pieces, fouls, cards, substitutions or offsides yet.
 
