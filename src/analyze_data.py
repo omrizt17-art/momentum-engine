@@ -22,7 +22,9 @@ HOME, AWAY = "#2a78d6", "#eb6834"  # team colours (blue = home, orange = away)
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"  # text, secondary text and gridline colours
 Q = 0.2  # Tsallis entropy index used by Neuman et al. (2018): amplifies rare passes
 N_PASSES = 40  # rolling entropy window: each team's last 40 completed passes
-MOM_WINDOW = 5  # rolling momentum window in minutes
+MOM_WINDOW = 3  # rolling momentum window in minutes (tuned: 3 beats 5, catches switches ~2 min faster)
+PASS_W = 0.5  # points for a completed final-third pass (tuned: 1.0 overweighted long possession spells)
+MOM_THRESHOLD = 5  # momentum above +5 / below -5 = a team is dominating (tuned: 2 was too low)
 
 plt.rcParams.update({  # one consistent, quiet style for every figure
     "font.size": 10, "axes.edgecolor": GRID, "axes.labelcolor": MUTED,  # small text, light frame
@@ -53,12 +55,12 @@ def momentum_per_minute(ev):  # rolling momentum for one match, one value per el
     ft_pass = (ev.event_type == "pass") & (ev.outcome == "complete") & (ev.end_x >= 66)  # completed pass into the final third
     high_win = ev.event_type.isin(["interception", "tackle"]) & (ev.outcome == "won") & (ev.x >= 50)  # ball won in the opponent's half
     shot = ev.event_type == "shot"  # any shot
-    points = ft_pass * 1 + high_win * 2 + shot * 3  # weight each threat signal
+    points = ft_pass * PASS_W + high_win * 2 + shot * 3  # weight each threat signal
     sign = np.where(ev.team == "home", 1, -1)  # home threat counts up, away threat counts down
     minute = (ev.timestamp_s // 60).astype(int)  # elapsed minute of each event
     raw = pd.Series(points * sign).groupby(minute).sum()  # net threat per minute
     raw = raw.reindex(range(minute.max() + 1), fill_value=0)  # include minutes with no threat events
-    return raw.rolling(MOM_WINDOW, min_periods=1).mean()  # smooth over the last 5 minutes
+    return raw.rolling(MOM_WINDOW, min_periods=1).mean()  # smooth over the last MOM_WINDOW minutes
 
 
 def rolling_entropy(ev, team):  # normalised pass entropy of one team, updated every completed pass
@@ -157,7 +159,7 @@ def validate(ev, truth, out):  # do the metrics recover the hidden states?
 
     r_mom = m.momentum.corr(m.regime)  # correlation momentum vs hidden regime
     r_ent = en.entropy.corr(en.chaotic)  # correlation entropy vs hidden chaos
-    m["predicted"] = np.select([m.momentum > 2, m.momentum < -2], [1, -1], 0)  # simple threshold classifier (±2 is a first guess, tune it)
+    m["predicted"] = np.select([m.momentum > MOM_THRESHOLD, m.momentum < -MOM_THRESHOLD], [1, -1], 0)  # threshold classifier (tuned with tune_metrics.py)
     acc = (m.predicted == m.regime).mean()  # share of minutes where it matches the truth
 
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.2))  # two panels side by side
