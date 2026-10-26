@@ -1,13 +1,14 @@
 # Pitch and project description
 
 Written for: hackathon judges (Microsoft and the Premier League), and for the submission form.
-Items in [BRACKETS] must be filled in by the team before submitting.
+Final text as of 2026-10-26. The only item to check by hand is the team list.
 
 **Challenge:** The Synthetic Match Insights Engine for Premier League Studio
 **Project name:** Momentum & Chaos Engine
-**Team:** [names]
-**Repository (must be public):** [URL]
-**Demo video (under 2 minutes, public URL):** [URL]
+**Team:** Elon Bryger and Omri (GitHub: omrizt17-art)
+**Repository (public):** https://github.com/omrizt17-art/momentum-engine
+**Live demo:** https://momentum-engine-52e742.azurewebsites.net/
+**Demo video (1 min 49 s, public):** https://youtu.be/P_BxglCTw_4
 
 ## Elevator pitch (about 60 words)
 
@@ -55,27 +56,27 @@ A small newsroom of agents with one job each, a shared state (the Blackboard), h
 - The engine itself is classical analytics, not an LLM. That is deliberate: it is fast, testable and explainable.
 
 This is our own lightweight orchestration, not Microsoft Agent Framework or A2A. The model-using agents are tested with a
-scripted fake model; [confirm: run with a real Azure OpenAI deployment on DATE].
+scripted fake model (failure paths) and were run live on Azure OpenAI in Microsoft Foundry on 2026-10-26.
 
 ## Microsoft and Azure technologies
 
 | Technology | Use | Status |
 | --- | --- | --- |
-| Microsoft Foundry (Azure AI Foundry resource and project `momentum-project`, France Central) with Azure OpenAI `gpt-4.1-mini` | Analyst and Writer agents: stories and recaps | **Tested live on 2026-10-26**: `check_azure.py` passes on the Foundry endpoint; a full simulated match gave 10 of 10 model-written cards and a recap, in English and Hebrew. The model is deployed on the Foundry resource; the agents call it through the Azure OpenAI API. We do not use Foundry Agent Service. [Confirm on the public URL that cards say "written by Azure OpenAI" before you claim it there] |
-| Azure Event Hubs (Basic, France Central) | Transport between the match streamer and the engine: the public dashboard source "Simulated match via Azure Event Hubs" sends the match into the hub and reads it back | Tested 2026-10-26: 2152 of 2152 events back in the same order. [Confirm it works on the public URL before you claim it there] |
-| Azure App Service (Linux, Python 3.12) | Hosts the dashboard: https://momentum-engine-52e742.azurewebsites.net/ | Deployed 2026-10-26. [Confirm it still opens before submitting] |
+| Microsoft Foundry (Azure AI Foundry resource and project `momentum-project`, France Central) with Azure OpenAI `gpt-4.1-mini` | Analyst and Writer agents: stories and recaps | **Tested live on 2026-10-26**: `check_azure.py` passes on the Foundry endpoint; a full simulated match gave 10 of 10 model-written cards and a recap, in English and Hebrew. The model is deployed on the Foundry resource; the agents call it through the Azure OpenAI API. We do not use Foundry Agent Service. Confirmed on the public URL: cards say "written by Azure OpenAI". |
+| Azure Event Hubs (Basic, France Central) | Transport between the match streamer and the engine: the public dashboard source "Simulated match via Azure Event Hubs" sends the match into the hub and reads it back | Tested 2026-10-26: 2152 of 2152 events back in the same order. Confirmed on the public URL (sidebar source "Simulated match via Azure Event Hubs"). |
+| Azure App Service (Linux, Python 3.12) | Hosts the dashboard: https://momentum-engine-52e742.azurewebsites.net/ | Deployed 2026-10-26 and open to everyone. |
 
 ## Results (synthetic data, fresh seeds, mean over 4 seeds x 20 matches)
 
 - Momentum tracks the hidden dominant team: correlation 0.81; 76% of minutes classified correctly; median detection lag 2 minutes.
 - Chaos index separates chaotic from structured play: AUC 0.83 (0.5 = no signal). Its link to dominance is about 0.
 - Key moments: 66% precision, 81% recall against real momentum switches.
-- 65 automated tests, including: the engine never reads the hidden truth, never looks at future events, and the agents recover from model errors, rejections and an open circuit.
+- 76 automated tests, including: the engine never reads the hidden truth, never looks at future events, and the agents recover from model errors, rejections and an open circuit.
 
 ## Limits we state openly
 
 The weights were fitted on our own generator, so the numbers show the method works, not that it is right for real
-football. The Azure parts are tested with fakes unless marked above. Player running speed and distance (no player
+football. The Azure parts were also run live on 2026-10-26 (see the table); failure paths are tested with fakes. Player running speed and distance (no player
 tracking in the feed) and auto-eventing from real video are not covered; the auto-eventing prototype uses synthetic tracking.
 Set-up steps for Azure are in `docs/AZURE.md`.
 
