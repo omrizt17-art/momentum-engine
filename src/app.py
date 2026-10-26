@@ -43,6 +43,21 @@ def sim_events(seed):  # a simulated match, cached per seed
     return simulated_events(seed)
 
 
+def pick_lists(source, seed, folder, match_id):  # teams and players of the chosen match, for the favourite pickers
+    try:
+        if source == "Simulated match":
+            events = sim_events(int(seed))
+        elif source == "data/ folder":
+            events = load_events(folder, int(match_id))
+        else:
+            return [], []  # a live feed: names are not known before it starts
+    except Exception:
+        return [], []
+    teams = sorted({e["team_name"] for e in events if e.get("team_name")})
+    players = sorted({e["player_name"] for e in events if e.get("player_name")})
+    return teams, players
+
+
 # ---------- sidebar ----------
 
 with st.sidebar:
@@ -57,13 +72,14 @@ with st.sidebar:
     else:
         folder = st.text_input("Data folder", "data")
         match_id = st.number_input("Match id", 1, 999, 1)
-    speed = st.slider("Speed (x real time)", 1, 120, 30, help="30 = a match in about 3 minutes")
+    speed = st.number_input("Speed (x real time)", 1, 120, 30, key="speed", help="Higher = faster. 30 = a match in about 3 minutes, 120 = under a minute")
     st.header("Viewer")
     mode_label = st.radio("Mode", ["Casual fan", "Analyst"], horizontal=True)
     mode = "casual" if mode_label == "Casual fan" else "analyst"
     language = st.selectbox("Language", list(LANGUAGES), format_func=lambda c: f"{LANGUAGES[c]} ({c})")
-    fav_club = st.text_input("Favourite club", "", placeholder="e.g. Redcliffe Town") or None
-    fav_player = st.text_input("Favourite player", "", placeholder="e.g. Oscar Fitzroy") or None
+    teams, players = pick_lists(source, locals().get("seed"), locals().get("folder"), locals().get("match_id"))
+    fav_club = st.selectbox("Favourite club", [None] + teams, format_func=lambda t: "(none)" if t is None else t)
+    fav_player = st.selectbox("Favourite player", [None] + players, format_func=lambda t: "(none)" if t is None else t)
     c1, c2 = st.columns(2)
     start = c1.button("▶ Start", width="stretch", type="primary")
     stop = c2.button("■ Stop", width="stretch")
