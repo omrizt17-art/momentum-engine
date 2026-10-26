@@ -65,8 +65,8 @@ Hackathon: Inside the Game (Microsoft x Premier League). Submissions close **27 
 | Public GitHub repository | ⬜ Currently private: make it public before submitting |
 | Pitch / description | ✅ Draft in [docs/PITCH.md](docs/PITCH.md): fill in the [BRACKETS] |
 | Demo video under 2 minutes, public URL | ⬜ Script in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) |
-| Azure set-up: OpenAI, Event Hubs, Container Apps | ⬜ One command: `bash deploy/azure_setup.sh`, then `python src/check_azure.py` (see [docs/AZURE.md](docs/AZURE.md)). The script and the checker are ready but were not run against a real subscription |
-| Real Azure OpenAI run (key, endpoint, deployment in `.env`) | ⬜ Not tested yet: only fakes and templates |
+| Azure set-up: OpenAI, Event Hubs, Container Apps | ⬜ One command: `bash deploy/azure_setup.sh`, then `python src/check_azure.py` (see [docs/AZURE.md](docs/AZURE.md)). The Azure OpenAI part was run on an Azure for Students subscription and works; Event Hubs and Container Apps are not run yet |
+| Real Azure OpenAI run (key, endpoint, deployment in `.env`) | ✅ Tested 2026-10-26: `gpt-4.1-mini` in France Central. 10 of 10 cards and the recap written by the model, in English (analyst) and Hebrew (casual) |
 | Real Azure Event Hubs run | ⬜ Optional, not tested yet |
 | Dashboard reviewed in a browser | ⬜ Tested headless only |
 | Everything in English (code, docs, UI) | ✅ The only non-English text is the optional Hebrew and Spanish template languages (brief item vi) |
@@ -672,8 +672,8 @@ Not covered: player running speed and distance (the feed has no player tracking)
   r = -0.16; it is now about 0, but the correction is another number fitted on this generator.
 - **Key-moment precision is 66%:** some `momentum_shift` moments are early or brief. The hold time and thresholds trade
   speed for precision.
-- **The Azure OpenAI path has not run against the real service yet.** It is tested with a fake client (accepted answer,
-  one retry, two rejections, error and timeout), and the templates are tested directly.
+- **Azure OpenAI was tested live once** (2026-10-26, 10 of 10 cards, two languages), plus with a fake client for the failure paths
+  (retry, two rejections, error, timeout, rate limit). Event Hubs and Container Apps have not been run on Azure.
 - **The dashboard was tested headless** (no errors in casual and analyst mode, language switch). Layout and look were
   not reviewed in a browser.
 - **Event Hubs is tested with fakes only.** The JSON round trip, partition key (one match per partition) and

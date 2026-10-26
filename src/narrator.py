@@ -141,7 +141,7 @@ def allowed_numbers(moment):  # every number a truthful sentence may contain
 
 
 def verify(text, moment, mode):  # returns None if the text is fine, otherwise the reason it is not
-    if not text or len(text) > 400:
+    if not text or len(text) > 600:
         return "empty or too long"
     found = [n.replace(",", ".") for n in NUM.findall(text)]
     if mode == "casual":  # casual text may mention the minute and nothing else numeric

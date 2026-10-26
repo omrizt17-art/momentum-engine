@@ -9,12 +9,13 @@
 # It writes your keys to .env (git-ignored) and never prints them. It is safe to run again: existing resources are reused.
 # Run it from the repo folder, in Git Bash, WSL or Azure Cloud Shell (bash).
 #
-# NOT TESTED against a real subscription when this file was written. If a step fails, the message says which one;
+# Tested on 2026-10-26 on an Azure for Students subscription (Azure OpenAI part: gpt-4.1-mini in francecentral). The Event Hubs and
+# Container Apps parts are NOT tested yet. If a step fails, the message says which one;
 # docs/AZURE.md has the same steps by hand and a troubleshooting table.
 
 set -euo pipefail
 
-LOCATION="${LOCATION:-swedencentral}"   # one region for everything; change if your model is not available there
+LOCATION="${LOCATION:-francecentral}"   # one region for everything. Azure for Students only allows a few (francecentral, austriaeast, switzerlandnorth, uaenorth, israelcentral)
 RG="${RG:-rg-momentum}"
 SUFFIX="${SUFFIX:-$(printf '%s' "$(az account show --query id -o tsv)" | tr -d '-' | cut -c1-6)}"  # stable per subscription, so a second run reuses the names
 OPENAI="${OPENAI:-momentum-openai-$SUFFIX}"
@@ -37,6 +38,9 @@ setenv() {  # setenv NAME VALUE : write or replace a line in .env without printi
 step "Subscription"
 az account show --query "{name:name, id:id}" -o tsv || { echo "Not signed in or no subscription. Run: az login"; exit 1; }
 
+step "Registering the providers (one time per subscription, can take a minute)"
+az provider register --namespace Microsoft.CognitiveServices --wait -o none
+
 step "Resource group $RG ($LOCATION)"
 az group create --name "$RG" --location "$LOCATION" -o none
 
@@ -49,16 +53,20 @@ fi
 step "Model deployment '$DEPLOYMENT'"
 if ! az cognitiveservices account deployment show --name "$OPENAI" --resource-group "$RG" --deployment-name "$DEPLOYMENT" -o none 2>/dev/null; then
   MODEL="${MODEL:-}"; VERSION="${VERSION:-}"
-  if [ -z "$MODEL" ]; then  # the first small chat model this region offers
+  if [ -z "$MODEL" ]; then  # gpt-4.1-mini if offered (works with the code as it is), else the first small chat model
+    read -r MODEL VERSION < <(az cognitiveservices account list-models --name "$OPENAI" --resource-group "$RG" \
+      --query "[?name=='gpt-4.1-mini' && capabilities.chatCompletion=='true'].[name,version]" -o tsv | head -1) || true
+  fi
+  if [ -z "${MODEL:-}" ]; then
     read -r MODEL VERSION < <(az cognitiveservices account list-models --name "$OPENAI" --resource-group "$RG" \
       --query "[?contains(name,'mini') && capabilities.chatCompletion=='true'].[name,version]" -o tsv | head -1) || true
   fi
   [ -n "${MODEL:-}" ] || { echo "No small chat model found in $LOCATION. Re-run with LOCATION=<another region> or MODEL=<name> VERSION=<version>."; exit 1; }
   echo "model: $MODEL $VERSION"
   az cognitiveservices account deployment create --name "$OPENAI" --resource-group "$RG" --deployment-name "$DEPLOYMENT" \
-    --model-name "$MODEL" --model-version "$VERSION" --model-format OpenAI --sku-name GlobalStandard --sku-capacity 10 -o none \
+    --model-name "$MODEL" --model-version "$VERSION" --model-format OpenAI --sku-name GlobalStandard --sku-capacity "${CAPACITY:-50}" -o none \
   || az cognitiveservices account deployment create --name "$OPENAI" --resource-group "$RG" --deployment-name "$DEPLOYMENT" \
-    --model-name "$MODEL" --model-version "$VERSION" --model-format OpenAI --sku-name Standard --sku-capacity 10 -o none
+    --model-name "$MODEL" --model-version "$VERSION" --model-format OpenAI --sku-name Standard --sku-capacity "${CAPACITY:-50}" -o none
 fi
 
 step "Writing .env"
