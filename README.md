@@ -65,6 +65,7 @@ Hackathon: Inside the Game (Microsoft x Premier League). Submissions close **27 
 | Public GitHub repository | ⬜ Currently private: make it public before submitting |
 | Pitch / description | ✅ Draft in [docs/PITCH.md](docs/PITCH.md): fill in the [BRACKETS] |
 | Demo video under 2 minutes, public URL | ⬜ Script in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) |
+| Public URL: https://momentum-engine-52e742.azurewebsites.net/ | ✅ Azure App Service (B1), deployed 2026-10-26; Container Apps does not work on a student subscription (see docs/AZURE.md) |
 | Azure set-up: OpenAI, Event Hubs, Container Apps | ⬜ One command: `bash deploy/azure_setup.sh`, then `python src/check_azure.py` (see [docs/AZURE.md](docs/AZURE.md)). The Azure OpenAI part was run on an Azure for Students subscription and works; Event Hubs and Container Apps are not run yet |
 | Real Azure OpenAI run (key, endpoint, deployment in `.env`) | ✅ Tested 2026-10-26: `gpt-4.1-mini` in France Central. 10 of 10 cards and the recap written by the model, in English (analyst) and Hebrew (casual) |
 | Real Azure Event Hubs run | ⬜ Optional, not tested yet |

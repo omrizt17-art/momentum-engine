@@ -65,8 +65,8 @@ with st.sidebar:
     fav_club = st.text_input("Favourite club", "", placeholder="e.g. Redcliffe Town") or None
     fav_player = st.text_input("Favourite player", "", placeholder="e.g. Oscar Fitzroy") or None
     c1, c2 = st.columns(2)
-    start = c1.button("▶ Start", use_container_width=True, type="primary")
-    stop = c2.button("■ Stop", use_container_width=True)
+    start = c1.button("▶ Start", width="stretch", type="primary")
+    stop = c2.button("■ Stop", width="stretch")
     client = get_client()
     st.caption("Stories: " + ("Azure OpenAI, with template fallback" if client else "templates only (set AZURE_OPENAI_* in .env to use the model)"))
 
@@ -148,11 +148,11 @@ def render():
             st.caption("Most involved players")
             rows = [{"team": names.get(t, t), "player": r["name"], "pos": r["position"], "events": r["involvement"], "pass acc %": r["accuracy_pct"],
                      "avg difficulty": r["avg_difficulty"], "top speed km/h": round(r["top_speed"])} for t in ("home", "away") for r in v["top_players"][t][:3]]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
             t = v["totals"]
             st.dataframe(pd.DataFrame({home: [t["home"]["shots"], round(t["home"]["xg"], 2), t["home"]["complete"], t["home"]["passes"]],
                                        away: [t["away"]["shots"], round(t["away"]["xg"], 2), t["away"]["complete"], t["away"]["passes"]]},
-                                      index=["Shots", "xG", "Passes completed", "Passes attempted"]), use_container_width=True)
+                                      index=["Shots", "xG", "Passes completed", "Passes attempted"]), width="stretch")
     with right:
         st.subheader("Insights")
         if v["breaker_open"]:

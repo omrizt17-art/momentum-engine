@@ -62,7 +62,7 @@ scripted fake model; [confirm: run with a real Azure OpenAI deployment on DATE].
 | --- | --- | --- |
 | Azure OpenAI (`gpt-4.1-mini` deployment, France Central) | Analyst and Writer agents: stories and recaps | **Tested live on 2026-10-26**: `check_azure.py` passes; a full simulated match gave 10 of 10 model-written cards and a recap, in English and Hebrew. [Optional: say Microsoft Foundry only if you created it through the Foundry portal] |
 | Azure Event Hubs | Production transport between streamer and engine | Code done and tested with fakes. [Confirm: tested against a real namespace] |
-| [Azure Container Apps or other hosting] | [Hosting the dashboard] | [Not done: delete this row or do it] |
+| Azure App Service (Linux, Python 3.12) | Hosts the dashboard: https://momentum-engine-52e742.azurewebsites.net/ | Deployed 2026-10-26. [Confirm it still opens before submitting] |
 
 ## Results (synthetic data, fresh seeds, mean over 4 seeds x 20 matches)
 
