@@ -112,6 +112,22 @@ and in the dashboard (`streamlit run src/app.py`) open "Why it matters" on a car
 
 Cost: a match makes about 15 to 25 cards, two short model calls each, so a few cents per match with a mini model.
 
+### Foundry route by CLI (what the public demo uses, run on 2026-10-26)
+A Foundry resource is an Azure AI Services account with project management turned on. A **project** lives inside it, and the
+model deployment is made on the resource, so the project can use it. The endpoint is still `https://<name>.openai.azure.com/`, so
+the code does not change.
+```bash
+az cognitiveservices account create --name momentum-foundry-<unique> --resource-group rg-momentum --location francecentral \
+  --kind AIServices --sku S0 --custom-domain momentum-foundry-<unique> --allow-project-management --assign-identity --yes
+az cognitiveservices account project create --name momentum-foundry-<unique> --resource-group rg-momentum \
+  --project-name momentum-project --location francecentral
+az cognitiveservices account deployment create --name momentum-foundry-<unique> --resource-group rg-momentum \
+  --deployment-name narrator --model-name gpt-4.1-mini --model-version 2025-04-14 --model-format OpenAI \
+  --sku-name GlobalStandard --sku-capacity 50
+```
+Then put `https://momentum-foundry-<unique>.openai.azure.com/`, the key (`az cognitiveservices account keys list`) and the
+deployment name `narrator` in `.env` and as web app settings. `python src/check_azure.py` must say all checks passed.
+
 ## 2. Azure Event Hubs (the cloud queue)
 
 ```bash

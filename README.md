@@ -67,7 +67,7 @@ Hackathon: Inside the Game (Microsoft x Premier League). Submissions close **27 
 | Demo video under 2 minutes, public URL | ⬜ Script in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) |
 | Public URL: https://momentum-engine-52e742.azurewebsites.net/ | ✅ Azure App Service (B1), deployed 2026-10-26; Container Apps does not work on a student subscription (see docs/AZURE.md) |
 | Azure set-up: OpenAI, App Service, Event Hubs | ✅ OpenAI and App Service done on an Azure for Students subscription. One command: `bash deploy/azure_setup.sh [--webapp] [--eventhubs]`, then `python src/check_azure.py` (see [docs/AZURE.md](docs/AZURE.md)). Event Hubs namespace `momentum-ns-52e742` created and tested |
-| Real Azure OpenAI run (key, endpoint, deployment in `.env`) | ✅ Tested 2026-10-26: `gpt-4.1-mini` in France Central. 10 of 10 cards and the recap written by the model, in English (analyst) and Hebrew (casual) |
+| Real Azure OpenAI run (key, endpoint, deployment in `.env`) | ✅ Tested 2026-10-26: `gpt-4.1-mini` deployed on a Microsoft Foundry resource (project `momentum-project`) in France Central. 10 of 10 cards and the recap written by the model, in English (analyst) and Hebrew (casual); `check_azure.py` passes on the Foundry endpoint |
 | Real Azure Event Hubs run | ✅ 2026-10-26: 2152 of 2152 events back, same order; `check_azure.py --eventhubs` passes; the full dashboard ran through the hub |
 | Dashboard reviewed in a browser | ✅ Reviewed on the public URL by the team on 2026-10-26; fixes made from that review (score direction, speed control, pickers, goal markers) |
 | Everything in English (code, docs, UI) | ✅ The only non-English text is the optional Hebrew and Spanish template languages (brief item vi) |
