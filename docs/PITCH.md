@@ -28,7 +28,8 @@ A pipeline with the five stages from the brief:
    dominance, chaotic pressure, being read, scrambling.
 3. **Explain.** Each key moment (goal, big chance, momentum shift, change of style) carries the reasons behind it, for
    example "21 final-third passes to 2" and "more predictable passing than the opponent".
-4. **Render.** A Streamlit dashboard shows score, minute, match state, live momentum and insight cards. Key moments are
+4. **Render.** A Streamlit dashboard shows score, minute, match state, a live momentum chart and a chaos chart with every goal
+   marked in the scorer's colour (so you can see whether the trend led to the goal), and insight cards. Key moments are
    timed, machine-readable JSON, so an overlay renderer could use them.
 5. **Personalize.** Casual fan and analyst are two different experiences (layout and text). The viewer picks language,
    favourite club and favourite player, and can follow one player through the match.
