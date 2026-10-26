@@ -63,8 +63,8 @@ Hackathon: Inside the Game (Microsoft x Premier League). Submissions close **27 
 | Item | Status |
 | --- | --- |
 | Public GitHub repository | ✅ Public |
-| Pitch / description | ✅ Draft in [docs/PITCH.md](docs/PITCH.md): fill in the [BRACKETS] |
-| Demo video under 2 minutes, public URL | ⬜ Script in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) |
+| Pitch / description | ✅ Final text in [docs/PITCH.md](docs/PITCH.md) |
+| Demo video under 2 minutes, public URL | ✅ 1 min 49 s: https://youtu.be/P_BxglCTw_4 (script in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md)) |
 | Public URL: https://momentum-engine-52e742.azurewebsites.net/ | ✅ Azure App Service (B1), deployed 2026-10-26; Container Apps does not work on a student subscription (see docs/AZURE.md) |
 | Azure set-up: OpenAI, App Service, Event Hubs | ✅ OpenAI and App Service done on an Azure for Students subscription. One command: `bash deploy/azure_setup.sh [--webapp] [--eventhubs]`, then `python src/check_azure.py` (see [docs/AZURE.md](docs/AZURE.md)). Event Hubs namespace `momentum-ns-52e742` created and tested |
 | Real Azure OpenAI run (key, endpoint, deployment in `.env`) | ✅ Tested 2026-10-26: `gpt-4.1-mini` deployed on a Microsoft Foundry resource (project `momentum-project`) in France Central. 10 of 10 cards and the recap written by the model, in English (analyst) and Hebrew (casual); `check_azure.py` passes on the Foundry endpoint |
@@ -168,7 +168,7 @@ momentum-engine/
 │   ├── app.py                # Streamlit dashboard
 │   └── validate_engine.py    # grades the live engine against truth, mean ± sd over seeds
 ├── docs/                     # PITCH.md, DEMO_SCRIPT.md, AZURE.md (set-up guide)
-├── Dockerfile                # dashboard image for Azure Container Apps
+├── Dockerfile                # optional dashboard image (the live demo runs on App Service, not from this image)
 ├── tests/                    # pytest: engine, streamer, narrator, verifier, fallback, recap, Event Hubs, dashboard
 ├── results/                  # saved validation numbers (engine_validation.csv)
 ├── .env.example              # Azure OpenAI settings (copy to .env, never commit .env)
