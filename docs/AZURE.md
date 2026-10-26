@@ -23,8 +23,8 @@ python src/check_azure.py                 # OK or FAIL for each part, with the l
 ```
 Add `--eventhubs` to both commands for Event Hubs, and `--webapp` to `azure_setup.sh` for the public dashboard URL.
 Run in Git Bash, WSL or Azure Cloud Shell. The script writes keys to `.env` and never prints them.
-The Azure OpenAI part was **run on 2026-10-26 on an Azure for Students subscription** and works. The Event Hubs and Container
-Apps parts have not been run yet. When `check_azure.py` says all checks passed, you may write "tested with Azure" in the pitch.
+The Azure OpenAI part was **run on 2026-10-26 on an Azure for Students subscription** and works. Event Hubs was also run (2026-10-26). The Container
+Apps part does not work on a student subscription. When `check_azure.py` says all checks passed, you may write "tested with Azure" in the pitch.
 
 Things we hit on a student subscription (the script now handles the first two):
 1. **Only some regions are allowed** (`francecentral`, `austriaeast`, `switzerlandnorth`, `uaenorth`, `israelcentral`). Other
@@ -116,7 +116,7 @@ Cost: a match makes about 15 to 25 cards, two short model calls each, so a few c
 
 ```bash
 az eventhubs namespace create --name momentum-ns-<unique> --resource-group rg-momentum --location swedencentral --sku Basic
-az eventhubs eventhub create --name match-events --namespace-name momentum-ns-<unique> --resource-group rg-momentum --partition-count 2
+az eventhubs eventhub create --name match-events --namespace-name momentum-ns-<unique> --resource-group rg-momentum --partition-count 2 --cleanup-policy Delete --retention-time-in-hours 1   # Basic tier: 1 day at most
 az eventhubs namespace authorization-rule keys list --namespace-name momentum-ns-<unique> --resource-group rg-momentum \
   --name RootManageSharedAccessKey --query primaryConnectionString -o tsv
 ```
@@ -132,7 +132,7 @@ python src/run_live.py --source eventhubs --match 1 --speed 0
 # terminal 2: publish match 1 at 30x speed
 python src/streamer.py --data data --match 1 --speed 30 --publish eventhubs
 ```
-In the dashboard, the source "Azure Event Hubs" appears once both settings exist.
+In the dashboard, the source "Simulated match via Azure Event Hubs" appears once both settings exist (also set them as app settings on the web app).
 
 Notes: the reader starts from the beginning of the stream, and Basic keeps messages for 1 day, so old runs of the same match id
 can be read again; use a different `--match` number for a fresh run. Cost: Basic is a few dollars a month; delete when done.

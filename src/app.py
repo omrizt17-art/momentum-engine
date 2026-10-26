@@ -16,7 +16,7 @@ import streamlit as st  # the dashboard
 
 sys.path.insert(0, str(Path(__file__).parent))  # let us import files from src/
 from live import LiveSession  # the live path
-from eventhub import EventHubFeed, configured as eventhub_configured  # optional Azure Event Hubs source
+from eventhub import EventHubFeed, configured as eventhub_configured, roundtrip_feed  # optional Azure Event Hubs source
 from narrator import LANGUAGES, Narrator, make_client  # stories
 from run_live import simulated_events  # one simulated match
 from streamer import load_events  # events from a data folder
@@ -48,7 +48,7 @@ def sim_events(seed):  # a simulated match, cached per seed
 
 def pick_lists(source, seed, folder, match_id):  # teams and players of the chosen match, for the favourite pickers
     try:
-        if source == "Simulated match":
+        if source in ("Simulated match", HUB):
             events = sim_events(int(seed))
         elif source == "data/ folder":
             events = load_events(folder, int(match_id))
@@ -65,13 +65,13 @@ def pick_lists(source, seed, folder, match_id):  # teams and players of the chos
 
 with st.sidebar:
     st.header("Match")
-    sources = ["Simulated match", "data/ folder"] + (["Azure Event Hubs"] if eventhub_configured() else [])
+    HUB = "Simulated match via Azure Event Hubs"
+    sources = ["Simulated match", "data/ folder"] + ([HUB] if eventhub_configured() else [])
     source = st.radio("Source", sources, horizontal=True)
-    if source == "Simulated match":
+    if source in ("Simulated match", HUB):
         seed = st.number_input("Match number (seed)", 1, 9999, 7)
-    elif source == "Azure Event Hubs":
-        hub_match = st.number_input("Match id", 1, 999, 1)
-        st.caption("Reads a match that `streamer.py --publish eventhubs` is sending. Speed is set by the publisher.")
+        if source == HUB:
+            st.caption("The match is sent into Azure Event Hubs and the dashboard reads it back from there.")
     else:
         folder = st.text_input("Data folder", "data")
         match_id = st.number_input("Match id", 1, 999, 1)
@@ -79,22 +79,22 @@ with st.sidebar:
     st.header("Viewer")
     mode_label = st.radio("Mode", ["Casual fan", "Analyst"], horizontal=True)
     mode = "casual" if mode_label == "Casual fan" else "analyst"
-    language = st.selectbox("Language", list(LANGUAGES), format_func=lambda c: f"{LANGUAGES[c]} ({c})")
     teams, players = pick_lists(source, locals().get("seed"), locals().get("folder"), locals().get("match_id"))
-    fav_club = st.selectbox("Favourite club", [None] + teams, format_func=lambda t: "(none)" if t is None else t)
-    fav_player = st.selectbox("Favourite player", [None] + players, format_func=lambda t: "(none)" if t is None else t)
+    fav_club = st.selectbox("Favourite club", [None] + teams, key="fav_club", format_func=lambda t: "(none)" if t is None else t)
+    fav_player = st.selectbox("Favourite player", [None] + players, key="fav_player", format_func=lambda t: "(none)" if t is None else t)
     c1, c2 = st.columns(2)
     start = c1.button("▶ Start", width="stretch", type="primary")
     stop = c2.button("■ Stop", width="stretch")
     client = get_client()
     st.caption("Stories: " + ("Azure OpenAI, with template fallback" if client else "templates only (set AZURE_OPENAI_* in .env to use the model)"))
+    language = st.selectbox("Language", list(LANGUAGES), format_func=lambda c: f"{LANGUAGES[c]} ({c})", key="language")  # last in the sidebar
 
 if start:  # a new match
     if st.session_state.get("session"):
         st.session_state.session.stop()
     try:
-        if source == "Azure Event Hubs":
-            events, play_speed = EventHubFeed(int(hub_match)), 0.0  # already paced by the publisher
+        if source == HUB:
+            events, play_speed = roundtrip_feed(sim_events(int(seed)), float(speed)), 0.0  # paced when published; the feed is already live
         else:
             events, play_speed = (sim_events(int(seed)) if source == "Simulated match" else load_events(folder, int(match_id))), float(speed)
         st.session_state.session = LiveSession(events, play_speed, Narrator(mode, language, fav_club, fav_player, client=client)).start()
