@@ -14,6 +14,30 @@ There are three Azure pieces. Do them in this order, and stop after step 2 if ti
 
 Everything is optional for the code to run: without Azure the app uses templates. So you can never be blocked by Azure.
 
+## Fast path (about 10 minutes once you have a subscription)
+
+```bash
+az login                                  # same terminal; choose the account that has the subscription
+bash deploy/azure_setup.sh                # resource group, Azure OpenAI, a small model, and writes .env
+python src/check_azure.py                 # OK or FAIL for each part, with the likely cause
+```
+Add `--eventhubs` to both commands for Event Hubs, and `--app` to `azure_setup.sh` for the public dashboard URL.
+Run in Git Bash, WSL or Azure Cloud Shell. The script writes keys to `.env` and never prints them.
+The Azure OpenAI part was **run on 2026-10-26 on an Azure for Students subscription** and works. The Event Hubs and Container
+Apps parts have not been run yet. When `check_azure.py` says all checks passed, you may write "tested with Azure" in the pitch.
+
+Things we hit on a student subscription (the script now handles the first two):
+1. **Only some regions are allowed** (`francecentral`, `austriaeast`, `switzerlandnorth`, `uaenorth`, `israelcentral`). Other
+   regions fail with `RequestDisallowedByAzure`. The script uses `francecentral`.
+2. **The provider must be registered once:** `az provider register --namespace Microsoft.CognitiveServices --wait`
+   (error `MissingSubscriptionRegistration` otherwise).
+3. **Quota differs per model, and can be 0.** `gpt-5.4-mini` had 0 quota (`InsufficientQuota`); `gpt-4.1-mini` had 200K tokens
+   a minute. List what you have with `az cognitiveservices usage list --location francecentral -o table` and pick a model with a limit above 0.
+4. **Reasoning models (gpt-5 family, o-series) need different request settings** (`max_completion_tokens`, no custom temperature).
+   The code uses `max_tokens` and a temperature, so use a non-reasoning model such as `gpt-4.1-mini`.
+5. **The service limits requests per second** (a 429 after 3 to 4 quick calls). The code spaces calls by one second and waits
+   the time the service asks for, once. Models also get retired: gpt-4.1-mini is marked "Legacy" with retirement in April 2027.
+
 ## 0. Before you start
 
 1. **A subscription.** Sign in at https://portal.azure.com with your Microsoft account. Options for credit:
@@ -159,6 +183,9 @@ story is a strong demo asset. Our own agent trace (shown in analyst mode) is the
 | `RateLimitError` (429) | Quota too small. Raise the capacity in the deployment, or wait a minute. The circuit breaker will already be using templates. |
 | Endpoint rejected | Use the endpoint exactly as shown, with `https://` and the trailing `/`. Some Foundry projects show a `cognitiveservices.azure.com` endpoint: it also works. |
 | Model not available in the region | Run the `list-models` command; create the resource in a region that has a chat model. |
+| `RequestDisallowedByAzure` | A student subscription limits regions: use `LOCATION=francecentral`. |
+| `InsufficientQuota` | That model has 0 quota for you. Pick another with `az cognitiveservices usage list`. |
+| `DeploymentModelNotSupported` | The model is retired or not offered in the region. Use `MODEL=gpt-4.1-mini VERSION=2025-04-14`. |
 | `az containerapp up` fails on a provider | Run the two `az provider register` commands, wait two minutes, retry. |
 | Dashboard on the URL shows nothing after Start | Check there is one replica and look at logs: `az containerapp logs show --name momentum-engine --resource-group rg-momentum --follow` |
 | Event Hubs reader waits forever | The publisher must use the same `--match` number and the same hub; start the reader before the publisher. |

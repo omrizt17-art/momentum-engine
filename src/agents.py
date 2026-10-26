@@ -31,6 +31,9 @@ from recap import build_recap, recap_facts, template_recap, verify as verify_rec
 BASE_PRIORITY = {"goal": 1.0, "momentum_shift": 0.7, "big_chance": 0.6, "player_focus": 0.5, "style_change": 0.4}
 SCRIPT = {"he": r"[֐-׿]", "ar": r"[؀-ۿ]"}  # languages whose text must contain their own letters
 STEP_TIMEOUT_S = 8.0  # a model call longer than this counts as a failure
+RATE_LIMIT_WAIT_S = 2.0  # wait before the one retry after a 429, if the service gives no wait time
+MAX_RATE_WAIT_S = 8.0  # never wait longer than this for a retry
+MIN_CALL_GAP_S = 1.0  # at most one model call per second, so bursts do not hit the service limit
 
 
 class Blackboard(dict):
@@ -116,8 +119,9 @@ class Analyst:
     name = "Analyst"
     SYSTEM = ("You are a football tactical analyst. From the facts only, say in at most two short sentences why this moment matters "
               "tactically, in English. Use only numbers that appear in the facts. No greetings, no opinions beyond the facts. "
-              "Meaning: momentum is home minus away threat in points per minute; 'passing' says whether the team's passing is more or "
-              "less predictable than the opponent's (control vs chaos).")
+              "Meaning: the team named in the facts is the one with the upper hand; momentum_in_favour_of_team is how strongly, in points per "
+              "minute (bigger = stronger, never a deficit); 'passing' says whether that team's passing is more or less predictable than the "
+              "opponent's (control vs chaos); counts are [team, opponent].")
 
     def run(self, board, newsroom):
         m = board["moment"]
@@ -136,7 +140,11 @@ class Analyst:
 
 
 def _facts_view(m):
-    return {k: m.get(k) for k in ("type", "elapsed_minute", "team_name", "state", "momentum", "drivers", "facts", "score")}
+    """What the models see. Momentum is given as a size in favour of the moment's team, so the sign cannot be misread."""
+    v = {k: m.get(k) for k in ("type", "elapsed_minute", "team_name", "state", "drivers", "facts", "score")}
+    if m["type"] in ("momentum_shift", "style_change"):
+        v["momentum_in_favour_of_team"] = round(abs(m["momentum"]), 1)  # points per minute; the team is the one on top
+    return v
 
 
 class Writer:
@@ -154,8 +162,8 @@ class Writer:
             board["draft"] = None
             return "skipped", "model unavailable" + (" (circuit open)" if newsroom.breaker.is_open else "")
         system = (f"You are a live football commentator. Write in {LANGUAGES.get(prof['language'], prof['language'])}. {self.STYLE[prof['mode']]} "
-                  f"Write exactly {plan['sentences']} sentence(s). Use ONLY the facts and the analyst note: do not invent players, numbers or events. "
-                  "Explain why the moment matters, not just that it happened. Reply with the story only.")
+                  f"Write exactly {plan['sentences']} sentence(s), under 45 words in total. Use ONLY the facts and the analyst note: do not invent players, numbers or events. "
+                  "Explain why the moment matters, not just that it happened. For momentum and style moments the named team has the upper hand: never call it a deficit. Reply with the story only.")
         if plan["angle"].startswith("club:") or plan["supporter_view"]:
             system += f" The viewer supports {prof['fav_club']}: tell it from that club's point of view."
         if plan["angle"].startswith("player:"):
@@ -207,6 +215,8 @@ class Newsroom:
         self.client = client
         self.breaker = breaker or CircuitBreaker()
         self.max_attempts = max_attempts
+        self.pace_lock = threading.Lock()
+        self.last_call = 0.0
         self.director, self.analyst, self.writer, self.verifier, self.fallback = Director(), Analyst(), Writer(), Verifier(), Fallback()
 
     # ----- model access, shared by the LLM agents -----
@@ -215,16 +225,39 @@ class Newsroom:
         return self.client is not None and self.breaker.allow()
 
     def ask(self, system, user, max_tokens):
-        """One model call. Returns (text, None) or (None, error). Feeds the circuit breaker."""
+        """One model call. Returns (text, None) or (None, error). Feeds the circuit breaker.
+        A rate-limit answer (429) is retried once after a short wait, because it is not a sign of a broken model."""
+        for attempt in range(2):
+            self._pace()
+            try:
+                r = self.client.chat.completions.create(model=os.getenv("AZURE_OPENAI_DEPLOYMENT"), temperature=0.6, max_tokens=max_tokens,
+                                                        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}], timeout=STEP_TIMEOUT_S)
+                text = (r.choices[0].message.content or "").strip()
+                self.breaker.record(bool(text))
+                return (text, None) if text else (None, "empty answer")
+            except Exception as e:
+                if type(e).__name__ == "RateLimitError" and attempt == 0:
+                    time.sleep(self._retry_wait(e))
+                    continue
+                self.breaker.record(False)
+                return None, f"{type(e).__name__}"
+
+    def _pace(self):
+        """Keep at least MIN_CALL_GAP_S between two model calls, across all threads."""
+        with self.pace_lock:
+            wait = self.last_call + MIN_CALL_GAP_S - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            self.last_call = time.time()
+
+    @staticmethod
+    def _retry_wait(exc):
+        """How long the service asked us to wait (retry-after-ms header), within limits."""
         try:
-            r = self.client.chat.completions.create(model=os.getenv("AZURE_OPENAI_DEPLOYMENT"), temperature=0.6, max_tokens=max_tokens,
-                                                    messages=[{"role": "system", "content": system}, {"role": "user", "content": user}], timeout=STEP_TIMEOUT_S)
-            text = (r.choices[0].message.content or "").strip()
-            self.breaker.record(bool(text))
-            return (text, None) if text else (None, "empty answer")
-        except Exception as e:
-            self.breaker.record(False)
-            return None, f"{type(e).__name__}"
+            ms = float(exc.response.headers.get("retry-after-ms"))
+            return max(0.5, min(MAX_RATE_WAIT_S, ms / 1000.0 + 0.5))
+        except Exception:
+            return RATE_LIMIT_WAIT_S
 
     def _step(self, agent, board):
         t0 = time.time()

@@ -152,3 +152,23 @@ def test_live_cards_carry_the_agent_trace_and_player_focus_cards_appear():
     assert all(c["trace"] for c in v["cards"])
     assert any(c["moment"]["type"] == "player_focus" for c in v["cards"])
     assert v["focus_player"]["name"] == star and v["ticker"] and v["top_players"]["home"]
+
+
+class RateLimitError(Exception):  # same class name as the SDK's
+    pass
+
+
+def test_a_rate_limit_is_retried_once_and_does_not_trip_the_breaker(monkeypatch):
+    import agents
+    monkeypatch.setattr(agents.time, "sleep", lambda s: None)  # no real waiting in tests
+    nr = Newsroom(Scripted(RateLimitError("429"), "A fine sentence."))
+    text, err = nr.ask("system", "user", 50)
+    assert text == "A fine sentence." and err is None and not nr.breaker.is_open and nr.breaker.failures == 0
+
+
+def test_two_rate_limits_in_a_row_count_as_one_failure(monkeypatch):
+    import agents
+    monkeypatch.setattr(agents.time, "sleep", lambda s: None)  # no real waiting in tests
+    nr = Newsroom(Scripted(RateLimitError("429"), RateLimitError("429")))
+    text, err = nr.ask("system", "user", 50)
+    assert text is None and err == "RateLimitError" and nr.breaker.failures == 1

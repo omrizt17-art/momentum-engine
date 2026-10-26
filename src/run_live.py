@@ -46,9 +46,12 @@ def main():
     print("Narrator:", "Azure OpenAI (with template fallback)" if client else "templates only (no Azure OpenAI settings found)")
     s = LiveSession(events, args.speed, Narrator(args.mode, args.lang, args.club, args.player, client=client)).start()
 
-    shown, last_minute = 0, -1
+    shown, last_minute, t_finish = 0, -1, None
     while True:
         v = s.view()
+        if v["finished"] and t_finish is None:
+            t_finish = time.time()
+        t_finish = t_finish or time.time()
         if v["error"]:
             print("ERROR:", v["error"])
             break
@@ -57,7 +60,7 @@ def main():
             last_minute = snap["elapsed_minute"]
             print(f"{last_minute:>3}'  momentum {snap['momentum']:+5.1f}  {snap['regime_name']:<14}  {snap['score']['home']}-{snap['score']['away']}")
         for c in v["cards"][shown:]:  # print each card once, after its model text had a moment to arrive
-            if c["pending"] and not v["finished"]:
+            if c["pending"] and (not v["finished"] or (t_finish is not None and time.time() - t_finish < 90)):  # wait for the model; after full time, at most 90 s
                 break
             m = c["moment"]
             print(f"  >> {m['elapsed_minute']:>2}' [{m['type']}] {c['text']}")
