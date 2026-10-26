@@ -46,6 +46,8 @@ def verify(text, facts, mode):
     if mode == "casual":  # casual recap: the score and goal minutes only
         ok = {str(facts["score"]["home"]), str(facts["score"]["away"])} | {str(g["minute"]) for g in facts["goals"]}
     bad = [n for n in found if n not in ok]
+    if "possession" in text.lower():
+        return "possession is not in the facts"
     return f"numbers not in the facts: {bad}" if bad else None
 
 
@@ -87,7 +89,7 @@ def build_recap(view, narrator):  # returns {"text", "source", "language", "mode
             system += f" The viewer supports {narrator.fav_club}: tell it from that club's point of view."
         shown = {k: v for k, v in facts.items() if k != "key_moments"}  # a bare count of moments invites invented drama
         system += (" Say nothing about defending, goalkeepers, tactics or quality of play unless the numbers show it (shots, xG, pass completion). "
-                   "Name a player only as the scorer of a listed goal.")
+                   "Name a player only as the scorer of a listed goal. Never mention possession. Stop when the facts stop: no closing sentence about what it means.")
         messages = [{"role": "system", "content": system}, {"role": "user", "content": "Facts:\n" + json.dumps(shown, ensure_ascii=False)}]
         for _ in range(2):
             try:

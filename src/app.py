@@ -10,6 +10,7 @@ The engine and the model calls run in a background thread (live.py); this page o
 import sys  # to find sibling modules
 from pathlib import Path  # file paths
 
+import altair as alt  # charts with goal markers
 import pandas as pd  # tables for the charts
 import streamlit as st  # the dashboard
 
@@ -30,6 +31,8 @@ ICON = {"goal": "⚽", "big_chance": "🎯", "momentum_shift": "🔥", "style_ch
 TITLE = {"goal": "Goal", "big_chance": "Big chance", "momentum_shift": "Momentum shift", "style_change": "Change of style", "player_focus": "Your player"}
 BADGE = {"long_pass": "🎯 long pass", "hard_pass": "🧩 hard pass", "fast_ball": "💨 fast ball", "power_shot": "🚀 power shot", "goal": "⚽ goal",
          "big_chance": "🎯 big chance", "milestone": "🏅 milestone"}
+HOME_C, AWAY_C = "#3d9df3", "#f5b301"  # one colour per team everywhere: blue = home, yellow = away
+DOT = {"home": ":blue[\u25cf]", "away": ":yellow[\u25cf]"}
 STATUS = {"ok": "✓", "skipped": "–", "rejected": "✗", "error": "!"}
 
 
@@ -119,6 +122,64 @@ def team_tag(v, team):  # coloured state label for one team
     return f":{colour}-badge[{label}]"
 
 
+def goals_of(v):  # every goal so far: minute, side, scorer, score after it
+    return [{"minute": c["moment"]["elapsed_minute"], "side": c["moment"]["team"], "team": c["moment"]["team_name"],
+             "player": (c["moment"].get("facts") or {}).get("player", ""), "score": f"{c['moment']['score']['home']}-{c['moment']['score']['away']}"}
+            for c in v["cards"] if c["moment"]["type"] == "goal"]
+
+
+def value_at(hist, minute, key):  # the history value at (or just before) a minute
+    rows = [h for h in hist if h["minute"] <= minute]
+    return rows[-1][key] if rows else 0.0
+
+
+def goal_layer(goals, ykey, hist, home, away):  # dashed line + ball marker at each goal, in the scoring team's colour
+    if not goals:
+        return None
+    g = pd.DataFrame([{**x, "y": value_at(hist, x["minute"], ykey(x["side"])),
+                       "label": f"{x['minute']}' {x['player'] or 'Goal'} ({x['team']}) {x['score']}"} for x in goals])
+    col = alt.Color("team:N", scale=alt.Scale(domain=[home, away], range=[HOME_C, AWAY_C]), legend=None)
+    tip = ["label"]
+    x = alt.X("minute:Q")
+    rule = alt.Chart(g).mark_rule(strokeDash=[5, 3], strokeWidth=2.5, opacity=0.9).encode(x=x, color=col, tooltip=tip)
+    pts = alt.Chart(g).mark_point(shape="circle", size=230, filled=True, stroke="white", strokeWidth=2).encode(x=x, y="y:Q", color=col, tooltip=tip)
+    ball = alt.Chart(g).mark_text(text="\u26bd", dy=-17, fontSize=17).encode(x=x, y="y:Q", tooltip=tip)
+    return rule + pts + ball
+
+
+def momentum_chart(df, goals, hist, home, away):
+    lim = max(10, int(df["momentum"].abs().max()) + 2)
+    x = alt.X("minute:Q", scale=alt.Scale(domain=[0, 95]), title="Minute")
+    y = alt.Y("v:Q", scale=alt.Scale(domain=[-lim, lim]), title="Momentum")
+    base = alt.Chart(df).encode(x=x)
+    up = base.transform_calculate(v="max(datum.momentum, 0)").mark_area(opacity=0.6, color=HOME_C, interpolate="monotone").encode(y=y)
+    dn = base.transform_calculate(v="min(datum.momentum, 0)").mark_area(opacity=0.6, color=AWAY_C, interpolate="monotone").encode(y=y)
+    zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="gray", opacity=0.6).encode(y="y:Q")
+    notes = pd.DataFrame({"x": [1, 1], "y": [lim - 1.2, -lim + 1.2], "t": [f"▲ {home} on top", f"▼ {away} on top"], "c": [HOME_C, AWAY_C]})
+    labels = alt.Chart(notes).mark_text(align="left", fontSize=12, fontWeight="bold").encode(x="x:Q", y="y:Q", text="t:N", color=alt.Color("c:N", scale=None))
+    layers = [up, dn, zero, labels, goal_layer(goals, lambda s: "momentum", hist, home, away)]
+    return alt.layer(*[l for l in layers if l is not None]).properties(height=240)
+
+
+def chaos_chart(df, goals, hist, home, away):
+    long = pd.concat([df[["minute", "home_chaos"]].rename(columns={"home_chaos": "chaos"}).assign(team=home),
+                      df[["minute", "away_chaos"]].rename(columns={"away_chaos": "chaos"}).assign(team=away)])
+    col = alt.Color("team:N", scale=alt.Scale(domain=[home, away], range=[HOME_C, AWAY_C]), legend=alt.Legend(orient="top", title=None))
+    lines = alt.Chart(long).mark_line(strokeWidth=2.5, interpolate="monotone").encode(
+        x=alt.X("minute:Q", scale=alt.Scale(domain=[0, 95]), title="Minute"), y=alt.Y("chaos:Q", title="Chaos index (higher = less predictable)"), color=col)
+    zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="gray", opacity=0.6).encode(y="y:Q")
+    layers = [lines, zero, goal_layer(goals, lambda s: f"{s}_chaos", hist, home, away)]
+    return alt.layer(*[l for l in layers if l is not None]).properties(height=220)
+
+
+def tug_of_war(momentum, home, away):  # one bar: who has the upper hand right now
+    share = min(95, max(5, 50 + 5 * momentum))
+    st.markdown(f"<div style='display:flex;height:14px;border-radius:7px;overflow:hidden;margin:2px 0 4px'>"
+                f"<div style='width:{share:.0f}%;background:{HOME_C}'></div><div style='width:{100 - share:.0f}%;background:{AWAY_C}'></div></div>"
+                f"<div style='display:flex;justify-content:space-between;font-size:.8rem;opacity:.8'><span>{home}</span><span>{away}</span></div>",
+                unsafe_allow_html=True)
+
+
 def render():
     v = session.view()
     snap, names, hist = v["snapshot"], v["names"], v["history"]
@@ -127,9 +188,13 @@ def render():
         st.error(v["error"])
 
     a, b, c = st.columns([2, 1, 2])
-    a.metric(home, snap["score"]["home"])
+    a.metric(f"{DOT['home']} {home}", snap["score"]["home"])
     b.metric("Minute", f"{snap['elapsed_minute']}'")
-    c.metric(away, snap["score"]["away"])
+    c.metric(f"{DOT['away']} {away}", snap["score"]["away"])
+    tug_of_war(snap["momentum"], home, away)
+    goals = goals_of(v)
+    if goals:
+        st.markdown("  \n".join(f"\u26bd `{g['minute']}'` {DOT[g['side']]} **{g['player'] or g['team']}** ({g['team']}) \u00b7 {g['score']}" for g in goals))
 
     on_top = {1: f"{home} on top", -1: f"{away} on top", 0: "Evenly balanced"}[snap["regime"]]
     left, right = st.columns([3, 2])
@@ -138,11 +203,11 @@ def render():
         st.markdown(f"{home}: {team_tag(v, 'home')}  ·  {away}: {team_tag(v, 'away')}")
         if hist:
             df = pd.DataFrame(hist).set_index("minute")
-            st.caption(f"Momentum: above zero = {home}, below zero = {away}")
-            st.line_chart(df[["momentum"]], height=220)
+            st.caption(f"Momentum: {DOT['home']} above zero = {home}, {DOT['away']} below zero = {away}. \u26bd and the dashed line mark a goal, in the scorer's colour.")
+            st.altair_chart(momentum_chart(df.reset_index(), goals, hist, home, away), width="stretch")
             if mode == "analyst":
-                st.caption("Chaos index per team (higher = less predictable passing, vs the team's own average)")
-                st.line_chart(df[["home_chaos", "away_chaos"]].rename(columns={"home_chaos": home, "away_chaos": away}), height=200)
+                st.caption("Chaos index per team (higher = less predictable passing, vs the team's own average). Goals are marked on the scorer's line.")
+                st.altair_chart(chaos_chart(df.reset_index(), goals, hist, home, away), width="stretch")
         fp = v["focus_player"]
         if fp:  # player-focused mode: the followed player's numbers
             st.subheader(f"Following {fp['name']} ({fp['position']})")
@@ -186,7 +251,7 @@ def render():
         for card in reversed(v["cards"]):
             m = card["moment"]
             with st.container(border=True):
-                st.markdown(f"{ICON[m['type']]} **{m['elapsed_minute']}'  {TITLE[m['type']]}**")
+                st.markdown(f"{ICON[m['type']]} {DOT.get(m['team'], '')} **{m['elapsed_minute']}'  {TITLE[m['type']]}**")
                 st.write(card["text"])
                 if mode == "analyst":
                     with st.expander("Why it matters"):

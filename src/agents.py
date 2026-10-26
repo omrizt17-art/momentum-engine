@@ -115,7 +115,8 @@ def rule_note(moment):
 
 RULES = ("Rules: name a person only in the role the facts give (scorer, shooter, player), and never say who saved, blocked or defended a shot. "
          "Do not claim anything about defending, goalkeepers, formations or what the opponent did unless the facts say it. "
-         "Call the counts exactly: final-third passes, high regains, pressing actions, shots.")
+         "Call the counts exactly: final-third passes, high regains, pressing actions, shots. Never mention possession. "
+         "Stop when the facts stop: no closing sentence about what it means for the future, the result or the tactics.")
 
 
 class Analyst:
@@ -227,6 +228,8 @@ class Verifier:
         seen = json.dumps(_facts_view(m), ensure_ascii=False).lower()
         if not problem and re.search(r"\b(goalkeeper|keeper)\b", text, re.I) and "goalkeeper" not in seen:
             problem = "mentions the goalkeeper, who is not in the facts"
+        if not problem and re.search(r"possession", text, re.I) and "possession" not in seen:
+            problem = "mentions possession, which is not in the facts"
         if not problem and re.search(r"\b(saved|blocked|stopped|denied) by [A-Z]", text):
             problem = "says who saved or blocked the shot; the facts do not say"
         if not problem and len(re.findall(r"[.!?؟。]+", text)) > plan["sentences"] + 1:
