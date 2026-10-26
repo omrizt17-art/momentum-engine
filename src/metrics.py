@@ -207,7 +207,7 @@ class Engine:
                                     facts={"player": ev["player_name"], "xg": round(float(ev["xg"]), 2)}))
         elif ev["event_type"] == "shot" and ev["xg"] >= BIG_CHANCE_XG and t - self.last_chance_t >= max(self.cooldown_s, 60):
             self.last_chance_t = t
-            out.append(self._moment("big_chance", ev["team"], t, drivers=[f"{ev['player_name']}: {ev['outcome'].replace('_', ' ')} (xG {ev['xg']:.2f})"],
+            out.append(self._moment("big_chance", ev["team"], t, drivers=[f"{ev['player_name']} took a shot: {ev['outcome'].replace('_', ' ')} (xG {ev['xg']:.2f})"],
                                     facts={"player": ev["player_name"], "xg": round(float(ev["xg"]), 2), "outcome": ev["outcome"]}))
         out += self._update_states(t)
         self.moments += out
