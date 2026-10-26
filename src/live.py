@@ -44,6 +44,8 @@ class LiveSession:
         self.speed = speed
         self.narrator = narrator or Narrator(client=None)
         self.engine = engine or Engine()
+        if isinstance(events, (list, tuple)):
+            self.prefill_names(events)
         self.newsroom = Newsroom(client=self.narrator.client)  # Director, Analyst, Writer, Verifier, Fallback
         self.players = PlayerTracker(focus=self.narrator.fav_player)
         self.ticker = deque(maxlen=14)  # latest name tags (every event)
@@ -97,6 +99,13 @@ class LiveSession:
                     "top_players": {t: self.players.top(5, t) for t in ("home", "away")}, "focus_player": self._focus_stats()}
 
     # ----- internals -----
+
+    def prefill_names(self, events):  # team names are fixed match information: show them from the first second, not after the first event
+        for e in events:
+            if e.get("team_name"):
+                self.engine.names.setdefault(e["team"], e["team_name"])
+            if len(self.engine.names) == 2:
+                break
 
     def _profile(self):
         n = self.narrator
