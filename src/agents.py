@@ -151,11 +151,18 @@ KIND_TEXT = {"shot": "took a shot", "long_pass": "played a long pass", "hard_pas
 PASSING_TEXT = {"less_predictable": "less predictable than the opponent's", "more_predictable": "more predictable than the opponent's"}
 
 
+def _score_for(m):
+    """The score from the moment's team's side, with the plain word, so '0-1' is never read as a lead for the wrong team."""
+    me, other = ("home", "away") if m.get("team") == "home" else ("away", "home")
+    a, b = m["score"][me], m["score"][other]
+    return f"{a}-{b} ({'team leads' if a > b else 'team trails' if a < b else 'level'})"
+
+
 def _facts_view(m):
     """What the models see: plain labels and one role per name, so nothing can be misread.
     Momentum is a size in favour of the moment's team (the team on top), never a signed number."""
     f = m.get("facts") or {}
-    v = {"type": m["type"], "minute": m["elapsed_minute"], "team": m.get("team_name"), "score_home_away": f"{m['score']['home']}-{m['score']['away']}"}
+    v = {"type": m["type"], "minute": m["elapsed_minute"], "team": m.get("team_name"), "score_for_team_vs_opponent": _score_for(m)}
     if m["type"] in ("momentum_shift", "style_change"):
         v["state"] = m.get("state")
         v["momentum_in_favour_of_team"] = round(abs(m["momentum"]), 1)  # points per minute
