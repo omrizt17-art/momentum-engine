@@ -134,6 +134,40 @@ def tune_entropy(ev, truth):  # try every entropy setting
     return pd.DataFrame(rows).sort_values("auc_chaos", ascending=False)  # best first
 
 
+# ---------- fit momentum weights ----------
+
+FEATURES = ["ft_pass", "high_regain", "shot", "pressure", "lost_pass"]  # same names as WEIGHTS in metrics.py
+
+
+def feature_table(ev, window):  # per match-minute: home minus away count of each threat signal, averaged over `window` minutes
+    flags = {  # one 0/1 column per signal
+        "ft_pass": (ev.event_type == "pass") & (ev.outcome == "complete") & (ev.end_x >= 66),  # completed pass into the final third
+        "high_regain": ev.event_type.isin(["interception", "tackle"]) & (ev.outcome == "won") & (ev.x >= 50),  # ball won in the opponent's half
+        "shot": ev.event_type == "shot",  # shot
+        "pressure": ev.event_type == "pressure",  # pressing action
+        "lost_pass": (ev.event_type == "pass") & (ev.outcome == "incomplete"),  # lost pass (a bad thing for the passer)
+    }
+    sign = np.where(ev.team == "home", 1, -1)  # home counts up, away counts down
+    cols = {k: (v * sign * (-1 if k == "lost_pass" else 1)).groupby([ev.match_id, ev.elapsed_minute]).sum() for k, v in flags.items()}  # signed counts per minute
+    raw = pd.DataFrame(cols)  # table of signed counts
+    out = []  # collector
+    for mid, g in raw.groupby(level=0):  # each match
+        g = g.droplevel(0).reindex(range(g.index.get_level_values(1).max() + 1), fill_value=0)  # include quiet minutes
+        r = g.rolling(window, min_periods=1).mean()  # average over the window
+        r.insert(0, "match_id", mid)  # match id
+        r.insert(1, "elapsed_minute", r.index)  # minute
+        out.append(r.reset_index(drop=True))  # keep
+    return pd.concat(out)  # one row per match-minute
+
+
+def fit_weights(ev, truth, window=3):  # least-squares fit of the hidden regime from the signals; weights scaled so a shot = 3
+    t = feature_table(ev, window).merge(truth, on=["match_id", "elapsed_minute"])  # features next to the truth
+    X, y = t[FEATURES].values, t.regime.values.astype(float)  # inputs and target (+1 / 0 / -1)
+    coef, *_ = np.linalg.lstsq(X, y, rcond=None)  # ordinary least squares, no intercept (the problem is symmetric)
+    scale = 3.0 / coef[FEATURES.index("shot")]  # make shot = 3 (shots are rare but clear, so this scale is the most stable)
+    return dict(zip(FEATURES, (coef * scale).round(2))), np.corrcoef(X @ coef, y)[0, 1]  # weights and the fit's r
+
+
 # ---------- run ----------
 
 def main():  # command-line entry point
@@ -145,6 +179,10 @@ def main():  # command-line entry point
     ev, truth = make_matches(args.matches, args.seed)  # fresh data
     pd.set_option("display.width", 200)  # wide printing
     print(f"{args.matches} matches, {len(ev)} events\n")  # sample size
+
+    w, r_fit = fit_weights(ev, truth)  # data-driven threat weights
+    print("FITTED THREAT WEIGHTS (shot scaled to 3; lost_pass is a penalty, so a positive number means 'subtract'):")  # header
+    print(w, f"  r with hidden regime = {r_fit:.3f}\n")  # result
 
     mom = tune_momentum(ev, truth)  # momentum grid
     print("MOMENTUM: top 10 settings by accuracy")  # header
