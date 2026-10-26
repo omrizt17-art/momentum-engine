@@ -137,7 +137,20 @@ In the dashboard, the source "Azure Event Hubs" appears once both settings exist
 Notes: the reader starts from the beginning of the stream, and Basic keeps messages for 1 day, so old runs of the same match id
 can be read again; use a different `--match` number for a fresh run. Cost: Basic is a few dollars a month; delete when done.
 
-## 3. Azure Container Apps (a public URL for the dashboard)
+## 3. A public URL for the dashboard
+
+### 3a. Azure App Service (use this on an Azure for Students subscription)
+`bash deploy/azure_setup.sh --webapp` (or the same commands by hand, see the script). It creates a Linux B1 plan (about $13 a
+month from your credit), a Python 3.12 web app, turns on websockets, sets the Azure OpenAI settings as app settings, and
+deploys a zip of `src/` and `requirements.txt` (never `.env`). Azure builds it (about 10 minutes). The app was deployed this way on
+2026-10-26: https://momentum-engine-52e742.azurewebsites.net/ . The startup command is
+`python -m streamlit run src/app.py --server.port 8000 --server.address 0.0.0.0 --server.headless true`.
+Keep one instance (a running match lives in the memory of one process). Delete the resource group after the results (20 November).
+
+### 3b. Azure Container Apps (does NOT work on Azure for Students)
+`az containerapp up --source .` failed on the student subscription with `TasksOperationsNotAllowed`: Azure Container Registry
+Tasks are blocked there, so Azure cannot build the image. It works on a normal pay-as-you-go subscription, or if you build the image
+yourself with Docker and push it to a registry. Use 3a instead.
 
 The repo has a `Dockerfile`. `az containerapp up --source .` builds it in Azure, so you do **not** need Docker locally.
 
