@@ -14,6 +14,18 @@ There are three Azure pieces. Do them in this order, and stop after step 2 if ti
 
 Everything is optional for the code to run: without Azure the app uses templates. So you can never be blocked by Azure.
 
+## Fast path (about 10 minutes once you have a subscription)
+
+```bash
+az login                                  # same terminal; choose the account that has the subscription
+bash deploy/azure_setup.sh                # resource group, Azure OpenAI, a small model, and writes .env
+python src/check_azure.py                 # OK or FAIL for each part, with the likely cause
+```
+Add `--eventhubs` to both commands for Event Hubs, and `--app` to `azure_setup.sh` for the public dashboard URL.
+Run in Git Bash, WSL or Azure Cloud Shell. The script writes keys to `.env` and never prints them. It was **not run
+against a real subscription** when it was written; if a step fails, the message names it, and the manual steps below
+do the same thing. When `check_azure.py` says all checks passed, you may write "tested with Azure" in the pitch.
+
 ## 0. Before you start
 
 1. **A subscription.** Sign in at https://portal.azure.com with your Microsoft account. Options for credit:

@@ -60,7 +60,7 @@ scripted fake model; [confirm: run with a real Azure OpenAI deployment on DATE].
 
 | Technology | Use | Status |
 | --- | --- | --- |
-| Azure OpenAI (Microsoft Foundry deployment) | Writer for stories and recaps | Code done and tested with a fake client. [Confirm: tested with a real deployment on DATE] |
+| Azure OpenAI (Microsoft Foundry deployment) | Analyst and Writer agents: stories and recaps | Code, set-up script and checker (`src/check_azure.py`) ready; tested with a fake client. [Confirm: `check_azure.py` passed on DATE. If not, write "designed for Azure OpenAI"] |
 | Azure Event Hubs | Production transport between streamer and engine | Code done and tested with fakes. [Confirm: tested against a real namespace] |
 | [Azure Container Apps or other hosting] | [Hosting the dashboard] | [Not done: delete this row or do it] |
 
