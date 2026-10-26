@@ -113,6 +113,11 @@ def rule_note(moment):
     return "; ".join(drivers[:2]) + ("." if drivers else "")
 
 
+RULES = ("Rules: name a person only in the role the facts give (scorer, shooter, player), and never say who saved, blocked or defended a shot. "
+         "Do not claim anything about defending, goalkeepers, formations or what the opponent did unless the facts say it. "
+         "Call the counts exactly: final-third passes, high regains, pressing actions, shots.")
+
+
 class Analyst:
     """Writes the tactical note. Uses the model when it can; the note is checked against the facts like any text."""
 
@@ -120,8 +125,8 @@ class Analyst:
     SYSTEM = ("You are a football tactical analyst. From the facts only, say in at most two short sentences why this moment matters "
               "tactically, in English. Use only numbers that appear in the facts. No greetings, no opinions beyond the facts. "
               "Meaning: the team named in the facts is the one with the upper hand; momentum_in_favour_of_team is how strongly, in points per "
-              "minute (bigger = stronger, never a deficit); 'passing' says whether that team's passing is more or less predictable than the "
-              "opponent's (control vs chaos); counts are [team, opponent].")
+              "minute (bigger = stronger, never a deficit); team_passing says whether that team's passing is more or less predictable than the "
+              "opponent's (control vs chaos); the last-5-minutes counts are team against opponent. " + RULES)
 
     def run(self, board, newsroom):
         m = board["moment"]
@@ -139,11 +144,31 @@ class Analyst:
         return "ok", text[:80]
 
 
+COUNT_LABEL = {"ft_pass": "final_third_passes", "high_regain": "high_regains", "shot": "shots", "pressure": "pressing_actions"}
+OUTCOME_TEXT = {"saved": "saved by the goalkeeper", "off_target": "off target", "blocked": "blocked by a defender"}
+KIND_TEXT = {"shot": "took a shot", "long_pass": "played a long pass", "hard_pass": "completed a hard pass", "fast_ball": "hit a very fast pass",
+             "power_shot": "hit a powerful shot", "milestone": "reached a passing milestone", "big_chance": "had a big chance"}
+PASSING_TEXT = {"less_predictable": "less predictable than the opponent's", "more_predictable": "more predictable than the opponent's"}
+
+
 def _facts_view(m):
-    """What the models see. Momentum is given as a size in favour of the moment's team, so the sign cannot be misread."""
-    v = {k: m.get(k) for k in ("type", "elapsed_minute", "team_name", "state", "drivers", "facts", "score")}
+    """What the models see: plain labels and one role per name, so nothing can be misread.
+    Momentum is a size in favour of the moment's team (the team on top), never a signed number."""
+    f = m.get("facts") or {}
+    v = {"type": m["type"], "minute": m["elapsed_minute"], "team": m.get("team_name"), "score_home_away": f"{m['score']['home']}-{m['score']['away']}"}
     if m["type"] in ("momentum_shift", "style_change"):
-        v["momentum_in_favour_of_team"] = round(abs(m["momentum"]), 1)  # points per minute; the team is the one on top
+        v["state"] = m.get("state")
+        v["momentum_in_favour_of_team"] = round(abs(m["momentum"]), 1)  # points per minute
+        v["last_5_minutes_team_vs_opponent"] = {COUNT_LABEL[k]: {"team": a, "opponent": b} for k, (a, b) in (f.get("counts") or {}).items()}
+        v["team_passing"] = PASSING_TEXT.get(f.get("passing"))
+    elif m["type"] == "goal":
+        v["scorer"], v["xg"] = f.get("player"), f.get("xg")
+    elif m["type"] == "big_chance":
+        v["shooter"], v["xg"], v["shot_outcome"] = f.get("player"), f.get("xg"), OUTCOME_TEXT.get(f.get("outcome"), f.get("outcome"))
+    elif m["type"] == "player_focus":
+        v["player"], v["what_happened"] = f.get("player"), KIND_TEXT.get(f.get("kind"), f.get("kind"))
+        v["details"] = f.get("metrics")
+        v["player_stats"] = f.get("stats")
     return v
 
 
@@ -163,7 +188,7 @@ class Writer:
             return "skipped", "model unavailable" + (" (circuit open)" if newsroom.breaker.is_open else "")
         system = (f"You are a live football commentator. Write in {LANGUAGES.get(prof['language'], prof['language'])}. {self.STYLE[prof['mode']]} "
                   f"Write exactly {plan['sentences']} sentence(s), under 45 words in total. Use ONLY the facts and the analyst note: do not invent players, numbers or events. "
-                  "Explain why the moment matters, not just that it happened. For momentum and style moments the named team has the upper hand: never call it a deficit. Reply with the story only.")
+                  "Explain why the moment matters, not just that it happened. For momentum and style moments the named team has the upper hand: never call it a deficit. " + RULES + " Reply with the story only.")
         if plan["angle"].startswith("club:") or plan["supporter_view"]:
             system += f" The viewer supports {prof['fav_club']}: tell it from that club's point of view."
         if plan["angle"].startswith("player:"):
@@ -192,6 +217,11 @@ class Verifier:
         if not problem and prof.get("fav_player") and _flat(prof["fav_player"]) in text.lower():
             if _flat(prof["fav_player"]) not in json.dumps(_facts_view(m), ensure_ascii=False).lower():
                 problem = "mentions the followed player, who is not in the facts"
+        seen = json.dumps(_facts_view(m), ensure_ascii=False).lower()
+        if not problem and re.search(r"\b(goalkeeper|keeper)\b", text, re.I) and "goalkeeper" not in seen:
+            problem = "mentions the goalkeeper, who is not in the facts"
+        if not problem and re.search(r"\b(saved|blocked|stopped|denied) by [A-Z]", text):
+            problem = "says who saved or blocked the shot; the facts do not say"
         if not problem and len(re.findall(r"[.!?؟。]+", text)) > plan["sentences"] + 1:
             problem = f"too long: asked for {plan['sentences']} sentence(s)"
         board["verdict"] = {"ok": problem is None, "problem": problem}

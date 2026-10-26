@@ -172,3 +172,30 @@ def test_two_rate_limits_in_a_row_count_as_one_failure(monkeypatch):
     nr = Newsroom(Scripted(RateLimitError("429"), RateLimitError("429")))
     text, err = nr.ask("system", "user", 50)
     assert text is None and err == "RateLimitError" and nr.breaker.failures == 1
+
+
+BIG_CHANCE = {"match_id": 1, "elapsed_minute": 66, "timestamp_s": 3960.0, "type": "big_chance", "team": "away", "team_name": "Westvale Athletic", "momentum": -4.0,
+              "state": None, "chaos_diff": 0.0, "drivers": ["Jude Kowalski took a shot: saved (xG 0.51)"],
+              "facts": {"player": "Jude Kowalski", "xg": 0.51, "outcome": "saved"}, "score": {"home": 0, "away": 0}}
+
+
+def test_the_models_see_plain_labels_and_one_role_per_name():
+    from agents import _facts_view
+    v = _facts_view(SHIFT)
+    assert "final_third_passes" in v["last_5_minutes_team_vs_opponent"] and "ft_pass" not in str(v)
+    assert v["momentum_in_favour_of_team"] == 8.4 and v["team_passing"].startswith("less predictable")
+    b = _facts_view(BIG_CHANCE)
+    assert b["shooter"] == "Jude Kowalski" and b["shot_outcome"] == "saved by the goalkeeper" and "player" not in b
+
+
+def test_verifier_blocks_naming_the_shooter_as_the_one_who_saved_it():
+    client = Scripted("note", "Westvale's 0.51 xG shot was saved by Jude Kowalski.", "Westvale had a big chance, 0.51 xG, saved by the goalkeeper.")
+    r = Newsroom(client).process(BIG_CHANCE, ANALYST)
+    assert r["source"] == "llm" and "goalkeeper" in r["text"]
+    assert ("Verifier", "rejected") in agents_run(r["trace"])
+
+
+def test_verifier_blocks_a_goalkeeper_that_the_facts_do_not_mention():
+    client = Scripted("note", "Great goalkeeper work denies Redcliffe.", "The keeper did well again.")
+    r = Newsroom(client).process(SHIFT, CASUAL)
+    assert r["source"] == "template" and "goalkeeper" in r["note"]

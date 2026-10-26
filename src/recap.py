@@ -85,7 +85,10 @@ def build_recap(view, narrator):  # returns {"text", "source", "language", "mode
                   "players, events or numbers. Explain what shaped the match, not just the result. Reply with the recap only.")
         if narrator.fav_club:
             system += f" The viewer supports {narrator.fav_club}: tell it from that club's point of view."
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": "Facts:\n" + json.dumps(facts, ensure_ascii=False)}]
+        shown = {k: v for k, v in facts.items() if k != "key_moments"}  # a bare count of moments invites invented drama
+        system += (" Say nothing about defending, goalkeepers, tactics or quality of play unless the numbers show it (shots, xG, pass completion). "
+                   "Name a player only as the scorer of a listed goal.")
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": "Facts:\n" + json.dumps(shown, ensure_ascii=False)}]
         for _ in range(2):
             try:
                 r = narrator.client.chat.completions.create(model=os.getenv("AZURE_OPENAI_DEPLOYMENT"), messages=messages, temperature=0.7, max_tokens=400)
