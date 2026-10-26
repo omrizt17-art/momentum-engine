@@ -108,3 +108,18 @@ def test_live_session_accepts_a_feed(events):
     s = LiveSession(EventHubFeed(1, consumer=FakeConsumer(msgs)), speed=0).start()
     s.thread.join(timeout=30)
     assert s.view()["error"] is None and s.view()["finished"]
+
+
+def test_publish_many_keeps_order_and_uses_the_fixed_partition(events):
+    class Producer(FakeProducer):
+        def create_batch(self, partition_key=None, partition_id=None):
+            b = FakeBatch(partition_key)
+            b.partition_id = partition_id
+            return b
+
+    p = Producer()
+    pub = EventHubPublisher(producer=p, partition_id="0")
+    pub.publish_many(events[:50])
+    sent = [json.loads(x)["timestamp_s"] for b in p.batches for x in b.items]
+    assert sent == [e["timestamp_s"] for e in events[:50]]
+    assert all(b.partition_id == "0" for b in p.batches)

@@ -28,7 +28,8 @@ A pipeline with the five stages from the brief:
    dominance, chaotic pressure, being read, scrambling.
 3. **Explain.** Each key moment (goal, big chance, momentum shift, change of style) carries the reasons behind it, for
    example "21 final-third passes to 2" and "more predictable passing than the opponent".
-4. **Render.** A Streamlit dashboard shows score, minute, match state, live momentum and insight cards. Key moments are
+4. **Render.** A Streamlit dashboard shows score, minute, match state, a live momentum chart and a chaos chart with every goal
+   marked in the scorer's colour (so you can see whether the trend led to the goal), and insight cards. Key moments are
    timed, machine-readable JSON, so an overlay renderer could use them.
 5. **Personalize.** Casual fan and analyst are two different experiences (layout and text). The viewer picks language,
    favourite club and favourite player, and can follow one player through the match.
@@ -60,8 +61,8 @@ scripted fake model; [confirm: run with a real Azure OpenAI deployment on DATE].
 
 | Technology | Use | Status |
 | --- | --- | --- |
-| Azure OpenAI (`gpt-4.1-mini` deployment, France Central) | Analyst and Writer agents: stories and recaps | **Tested live on 2026-10-26**: `check_azure.py` passes; a full simulated match gave 10 of 10 model-written cards and a recap, in English and Hebrew. [Optional: say Microsoft Foundry only if you created it through the Foundry portal] |
-| Azure Event Hubs | Production transport between streamer and engine | Code done and tested with fakes. [Confirm: tested against a real namespace] |
+| Microsoft Foundry (Azure AI Foundry resource and project `momentum-project`, France Central) with Azure OpenAI `gpt-4.1-mini` | Analyst and Writer agents: stories and recaps | **Tested live on 2026-10-26**: `check_azure.py` passes on the Foundry endpoint; a full simulated match gave 10 of 10 model-written cards and a recap, in English and Hebrew. The model is deployed on the Foundry resource; the agents call it through the Azure OpenAI API. We do not use Foundry Agent Service. [Confirm on the public URL that cards say "written by Azure OpenAI" before you claim it there] |
+| Azure Event Hubs (Basic, France Central) | Transport between the match streamer and the engine: the public dashboard source "Simulated match via Azure Event Hubs" sends the match into the hub and reads it back | Tested 2026-10-26: 2152 of 2152 events back in the same order. [Confirm it works on the public URL before you claim it there] |
 | Azure App Service (Linux, Python 3.12) | Hosts the dashboard: https://momentum-engine-52e742.azurewebsites.net/ | Deployed 2026-10-26. [Confirm it still opens before submitting] |
 
 ## Results (synthetic data, fresh seeds, mean over 4 seeds x 20 matches)

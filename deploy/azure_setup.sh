@@ -11,7 +11,7 @@
 # Run it from the repo folder, in Git Bash, WSL or Azure Cloud Shell (bash).
 #
 # Tested on 2026-10-26 on an Azure for Students subscription: Azure OpenAI (gpt-4.1-mini, francecentral) and the App Service dashboard
-# (steps run by hand, same commands as --webapp). Event Hubs is NOT tested. Container Apps (--app) FAILED on that subscription (ACR Tasks blocked). If a step fails, the message says which one;
+# (steps run by hand, same commands as --webapp). Event Hubs was run by hand with the same commands (Basic tier needs the 1-day retention flags in this script). Container Apps (--app) FAILED on that subscription (ACR Tasks blocked). If a step fails, the message says which one;
 # docs/AZURE.md has the same steps by hand and a troubleshooting table.
 
 set -euo pipefail
@@ -85,7 +85,7 @@ if [ "$WANT_HUB" = 1 ]; then
   az eventhubs namespace show --name "$HUBNS" --resource-group "$RG" -o none 2>/dev/null \
     || az eventhubs namespace create --name "$HUBNS" --resource-group "$RG" --location "$LOCATION" --sku Basic -o none
   az eventhubs eventhub show --name "$HUB" --namespace-name "$HUBNS" --resource-group "$RG" -o none 2>/dev/null \
-    || az eventhubs eventhub create --name "$HUB" --namespace-name "$HUBNS" --resource-group "$RG" --partition-count 2 -o none
+    || az eventhubs eventhub create --name "$HUB" --namespace-name "$HUBNS" --resource-group "$RG" --partition-count 2 --cleanup-policy Delete --retention-time-in-hours 1 -o none
   CONN="$(az eventhubs namespace authorization-rule keys list --namespace-name "$HUBNS" --resource-group "$RG" --name RootManageSharedAccessKey --query primaryConnectionString -o tsv)"
   setenv EVENTHUB_CONNECTION_STRING "$CONN"
   setenv EVENTHUB_NAME "$HUB"

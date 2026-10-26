@@ -36,7 +36,7 @@ def test_language_switch_does_not_break_the_page():
     at.number_input(key="speed").set_value(120)
     at.button[0].click().run()
     time.sleep(2)
-    at.selectbox[0].set_value("he").run()
+    at.selectbox(key="language").set_value("he").run()
     assert not at.exception
     at.button[1].click().run()
 
@@ -45,12 +45,12 @@ def test_player_focus_and_name_tags_render_in_analyst_mode():
     at = AppTest.from_file(APP, default_timeout=60).run()
     at.number_input(key="speed").set_value(120)
     at.radio[1].set_value("Analyst")
-    player = at.selectbox[2].options[1]  # the favourite-player picker lists the match's players; take the first
-    at.selectbox[2].set_value(player)
+    player = at.selectbox(key="fav_player").options[1]  # the favourite-player picker lists the match's players; take the first
+    at.selectbox(key="fav_player").set_value(player)
     at.button[0].click().run()
     time.sleep(3)
     at.run()
     assert not at.exception
     assert any("Player tags" in s.value for s in at.subheader)
-    assert at.selectbox[2].value == player
+    assert at.selectbox(key="fav_player").value == player
     at.button[1].click().run()

@@ -44,15 +44,15 @@ Key moments are turned into short AI-written insights, written differently for a
 | Incremental metrics engine (momentum, entropy, chaos index, states, key moments) | `src/metrics.py` | A | ✅ v1 done |
 | Engine validation (mean ± sd over seeds) | `src/validate_engine.py` | A | ✅ Done |
 | Live session (streamer → engine → narrator in a background thread) | `src/live.py` | A + B | ✅ Done |
-| AI narration: Writer (Azure OpenAI) + Verifier + template fallback; casual / analyst; en, he, es templates | `src/narrator.py` | B | ✅ Done. Templates and verifier tested; the live Azure call is not tested (no key yet) |
-| Full-time recap (same Writer / Verifier / fallback pattern) | `src/recap.py` | B | ✅ Done (same caveat) |
+| AI narration: Writer (Azure OpenAI) + Verifier + template fallback; casual / analyst; en, he, es templates | `src/narrator.py` | B | ✅ Done. Templates and verifier tested; the live Azure OpenAI call was tested on 2026-10-26 |
+| Full-time recap (same Writer / Verifier / fallback pattern) | `src/recap.py` | B | ✅ Done, tested live on Azure OpenAI too |
 | Terminal demo (backup if the dashboard fails) | `src/run_live.py` | B | ✅ Done |
-| Multi-agent newsroom: Director, Analyst, Writer, Verifier, Fallback, circuit breaker, trace | `src/agents.py` | B | ✅ Done, tested with a scripted fake model |
+| Multi-agent newsroom: Director, Analyst, Writer, Verifier, Fallback, circuit breaker, trace | `src/agents.py` | B | ✅ Done. Tested with a scripted fake model and live on Azure OpenAI. The Verifier also rejects wrong roles (who saved a shot), invented goalkeepers and any mention of possession |
 | Player layer: name tags, pass distance / accuracy / difficulty, ball speed, badges, player focus | `src/players.py` | A | ✅ Done |
 | Auto-eventing prototype on synthetic tracking | `src/autoevent.py` | A | ✅ Done (circular by construction, see above) |
-| Dashboard (Streamlit) | `src/app.py` | B | ✅ v2 done (player tags, player focus, agent trace), tested headless; look and feel not yet reviewed in a browser |
-| Azure Event Hubs transport (publisher and live feed) | `src/eventhub.py` | A | ✅ Done, tested with fake producer and consumer. Not tested against a real namespace |
-| Tests | `tests/` | A + B | ✅ 65 tests: no truth leak, no lookahead, determinism, streamer pace, verifier, fallback, recap, Event Hubs (fakes), dashboard (headless), agents, players, auto-eventing |
+| Dashboard (Streamlit) | `src/app.py` | B | ✅ v3 done and public. Goal markers (scorer's colour) on the momentum and chaos charts, one colour per team, tug-of-war bar, goal list, favourite club / player picked from lists, player tags, player focus, agent trace. Tested headless; reviewed in a browser by the team and fixed from that review |
+| Azure Event Hubs transport (publisher and live feed) | `src/eventhub.py` | A | ✅ Done. Tested with a fake producer and consumer, and on 2026-10-26 against a real namespace (Basic tier, France Central): a full simulated match (2152 events) went in and came back in the same order. The dashboard source "Simulated match via Azure Event Hubs" uses it |
+| Tests | `tests/` | A + B | ✅ 75 tests: no truth leak, no lookahead, determinism, streamer pace, verifier, fallback, recap, Event Hubs (fakes), dashboard (headless), agents, players, auto-eventing |
 
 ---
 
@@ -62,14 +62,14 @@ Hackathon: Inside the Game (Microsoft x Premier League). Submissions close **27 
 
 | Item | Status |
 | --- | --- |
-| Public GitHub repository | ⬜ Currently private: make it public before submitting |
+| Public GitHub repository | ✅ Public |
 | Pitch / description | ✅ Draft in [docs/PITCH.md](docs/PITCH.md): fill in the [BRACKETS] |
 | Demo video under 2 minutes, public URL | ⬜ Script in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) |
 | Public URL: https://momentum-engine-52e742.azurewebsites.net/ | ✅ Azure App Service (B1), deployed 2026-10-26; Container Apps does not work on a student subscription (see docs/AZURE.md) |
-| Azure set-up: OpenAI, Event Hubs, Container Apps | ⬜ One command: `bash deploy/azure_setup.sh`, then `python src/check_azure.py` (see [docs/AZURE.md](docs/AZURE.md)). The Azure OpenAI part was run on an Azure for Students subscription and works; Event Hubs and Container Apps are not run yet |
-| Real Azure OpenAI run (key, endpoint, deployment in `.env`) | ✅ Tested 2026-10-26: `gpt-4.1-mini` in France Central. 10 of 10 cards and the recap written by the model, in English (analyst) and Hebrew (casual) |
-| Real Azure Event Hubs run | ⬜ Optional, not tested yet |
-| Dashboard reviewed in a browser | ⬜ Tested headless only |
+| Azure set-up: OpenAI, App Service, Event Hubs | ✅ OpenAI and App Service done on an Azure for Students subscription. One command: `bash deploy/azure_setup.sh [--webapp] [--eventhubs]`, then `python src/check_azure.py` (see [docs/AZURE.md](docs/AZURE.md)). Event Hubs namespace `momentum-ns-52e742` created and tested |
+| Real Azure OpenAI run (key, endpoint, deployment in `.env`) | ✅ Tested 2026-10-26: `gpt-4.1-mini` deployed on a Microsoft Foundry resource (project `momentum-project`) in France Central. 10 of 10 cards and the recap written by the model, in English (analyst) and Hebrew (casual); `check_azure.py` passes on the Foundry endpoint |
+| Real Azure Event Hubs run | ✅ 2026-10-26: 2152 of 2152 events back, same order; `check_azure.py --eventhubs` passes; the full dashboard ran through the hub |
+| Dashboard reviewed in a browser | ✅ Reviewed on the public URL by the team on 2026-10-26; fixes made from that review (score direction, speed control, pickers, goal markers) |
 | Everything in English (code, docs, UI) | ✅ The only non-English text is the optional Hebrew and Spanish template languages (brief item vi) |
 
 ---
@@ -674,11 +674,12 @@ Not covered: player running speed and distance (the feed has no player tracking)
 - **Key-moment precision is 66%:** some `momentum_shift` moments are early or brief. The hold time and thresholds trade
   speed for precision.
 - **Azure OpenAI was tested live once** (2026-10-26, 10 of 10 cards, two languages), plus with a fake client for the failure paths
-  (retry, two rejections, error, timeout, rate limit). Event Hubs and Container Apps have not been run on Azure.
-- **The dashboard was tested headless** (no errors in casual and analyst mode, language switch). Layout and look were
-  not reviewed in a browser.
-- **Event Hubs is tested with fakes only.** The JSON round trip, partition key (one match per partition) and
-  end-of-match message are tested; a real namespace has not been used.
+  (retry, two rejections, error, timeout, rate limit). Container Apps does not work on a student subscription (we use App Service).
+- **The dashboard was tested headless** (no errors in casual and analyst mode, language switch) and reviewed in a browser by
+  the team; the charts were also rendered to images from a real simulated match and checked. Look and feel on other screen sizes was not reviewed.
+- **Event Hubs: one match, one partition.** The unit tests use fakes; one real run (2026-10-26) sent a whole match through a
+  Basic-tier namespace. The in-app path uses a fixed partition so the reader starts at once (reading with load balancing
+  took about a minute to start). Basic tier keeps data one day. The hub is a transport, not storage.
 - **Not covered from the brief:** player running speed and distance covered (no player tracking in the feed), and
   auto-eventing from real video. The auto-eventing prototype runs on a synthetic track built from the events, so its
   detection score is circular; the useful part is how well speed and distance survive noise.

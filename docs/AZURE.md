@@ -10,7 +10,7 @@ There are three Azure pieces. Do them in this order, and stop after step 2 if ti
 | --- | --- | --- | --- |
 | 1 | Azure OpenAI (in a Microsoft Foundry project) | The Analyst and Writer agents use a real model | **Yes**: this is the core "Microsoft AI platform" use |
 | 2 | Azure Event Hubs | The live event feed goes through a cloud queue | Recommended (cloud-native category) |
-| 3 | Azure Container Apps | The dashboard has a public URL | Recommended (judges can click it) |
+| 3 | Azure App Service (Container Apps does not work on a student subscription) | The dashboard has a public URL | Recommended (judges can click it) |
 
 Everything is optional for the code to run: without Azure the app uses templates. So you can never be blocked by Azure.
 
@@ -21,10 +21,10 @@ az login                                  # same terminal; choose the account th
 bash deploy/azure_setup.sh                # resource group, Azure OpenAI, a small model, and writes .env
 python src/check_azure.py                 # OK or FAIL for each part, with the likely cause
 ```
-Add `--eventhubs` to both commands for Event Hubs, and `--app` to `azure_setup.sh` for the public dashboard URL.
+Add `--eventhubs` to both commands for Event Hubs, and `--webapp` to `azure_setup.sh` for the public dashboard URL.
 Run in Git Bash, WSL or Azure Cloud Shell. The script writes keys to `.env` and never prints them.
-The Azure OpenAI part was **run on 2026-10-26 on an Azure for Students subscription** and works. The Event Hubs and Container
-Apps parts have not been run yet. When `check_azure.py` says all checks passed, you may write "tested with Azure" in the pitch.
+The Azure OpenAI part was **run on 2026-10-26 on an Azure for Students subscription** and works. Event Hubs was also run (2026-10-26). The Container
+Apps part does not work on a student subscription. When `check_azure.py` says all checks passed, you may write "tested with Azure" in the pitch.
 
 Things we hit on a student subscription (the script now handles the first two):
 1. **Only some regions are allowed** (`francecentral`, `austriaeast`, `switzerlandnorth`, `uaenorth`, `israelcentral`). Other
@@ -112,11 +112,27 @@ and in the dashboard (`streamlit run src/app.py`) open "Why it matters" on a car
 
 Cost: a match makes about 15 to 25 cards, two short model calls each, so a few cents per match with a mini model.
 
+### Foundry route by CLI (what the public demo uses, run on 2026-10-26)
+A Foundry resource is an Azure AI Services account with project management turned on. A **project** lives inside it, and the
+model deployment is made on the resource, so the project can use it. The endpoint is still `https://<name>.openai.azure.com/`, so
+the code does not change.
+```bash
+az cognitiveservices account create --name momentum-foundry-<unique> --resource-group rg-momentum --location francecentral \
+  --kind AIServices --sku S0 --custom-domain momentum-foundry-<unique> --allow-project-management --assign-identity --yes
+az cognitiveservices account project create --name momentum-foundry-<unique> --resource-group rg-momentum \
+  --project-name momentum-project --location francecentral
+az cognitiveservices account deployment create --name momentum-foundry-<unique> --resource-group rg-momentum \
+  --deployment-name narrator --model-name gpt-4.1-mini --model-version 2025-04-14 --model-format OpenAI \
+  --sku-name GlobalStandard --sku-capacity 50
+```
+Then put `https://momentum-foundry-<unique>.openai.azure.com/`, the key (`az cognitiveservices account keys list`) and the
+deployment name `narrator` in `.env` and as web app settings. `python src/check_azure.py` must say all checks passed.
+
 ## 2. Azure Event Hubs (the cloud queue)
 
 ```bash
 az eventhubs namespace create --name momentum-ns-<unique> --resource-group rg-momentum --location swedencentral --sku Basic
-az eventhubs eventhub create --name match-events --namespace-name momentum-ns-<unique> --resource-group rg-momentum --partition-count 2
+az eventhubs eventhub create --name match-events --namespace-name momentum-ns-<unique> --resource-group rg-momentum --partition-count 2 --cleanup-policy Delete --retention-time-in-hours 1   # Basic tier: 1 day at most
 az eventhubs namespace authorization-rule keys list --namespace-name momentum-ns-<unique> --resource-group rg-momentum \
   --name RootManageSharedAccessKey --query primaryConnectionString -o tsv
 ```
@@ -132,7 +148,7 @@ python src/run_live.py --source eventhubs --match 1 --speed 0
 # terminal 2: publish match 1 at 30x speed
 python src/streamer.py --data data --match 1 --speed 30 --publish eventhubs
 ```
-In the dashboard, the source "Azure Event Hubs" appears once both settings exist.
+In the dashboard, the source "Simulated match via Azure Event Hubs" appears once both settings exist (also set them as app settings on the web app).
 
 Notes: the reader starts from the beginning of the stream, and Basic keeps messages for 1 day, so old runs of the same match id
 can be read again; use a different `--match` number for a fresh run. Cost: Basic is a few dollars a month; delete when done.
@@ -181,7 +197,7 @@ az containerapp update --name momentum-engine --resource-group rg-momentum \
 | --- | --- |
 | Step 1 | "The Analyst and Writer agents run on Azure OpenAI in Microsoft Foundry (deployment `narrator`)." |
 | Step 2 | "Events travel through Azure Event Hubs, one partition per match, so order is kept." |
-| Step 3 | "The dashboard runs on Azure Container Apps: <URL>." |
+| Step 3 | "The dashboard runs on Azure App Service: <URL>." |
 | Not done | Do not claim it. Say "designed for" instead. |
 
 Microsoft Foundry also offers tracing and evaluation for agents; if you have time, a screenshot of a Foundry trace for one
@@ -200,7 +216,8 @@ story is a strong demo asset. Our own agent trace (shown in analyst mode) is the
 | `InsufficientQuota` | That model has 0 quota for you. Pick another with `az cognitiveservices usage list`. |
 | `DeploymentModelNotSupported` | The model is retired or not offered in the region. Use `MODEL=gpt-4.1-mini VERSION=2025-04-14`. |
 | `az containerapp up` fails on a provider | Run the two `az provider register` commands, wait two minutes, retry. |
-| Dashboard on the URL shows nothing after Start | Check there is one replica and look at logs: `az containerapp logs show --name momentum-engine --resource-group rg-momentum --follow` |
+| `az webapp deploy` ends with a 504 timeout | The build can still finish on the server. Check `az webapp log deployment list --name <app> --resource-group <rg>`: status 4 means success. |
+| Dashboard on the URL shows nothing after Start | Check there is one instance and look at logs: `az webapp log tail --name <app> --resource-group <rg>` |
 | Event Hubs reader waits forever | The publisher must use the same `--match` number and the same hub; start the reader before the publisher. |
 
 ## Clean up (to stop charges)

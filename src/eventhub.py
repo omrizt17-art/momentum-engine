@@ -14,7 +14,8 @@ Usage:
   python src/streamer.py --data data --match 1 --speed 30 --publish eventhubs      # producer side
   python src/run_live.py --source eventhubs --match 1 --speed 0                    # consumer side (events are already paced)
 
-Not yet tested against a real Event Hubs namespace: the tests use fake producer and event objects.
+Tested against a real namespace on 2026-10-26 (France Central, Basic tier): a simulated match sent through the hub and read back.
+The unit tests use fake producer and event objects.
 """
 
 import json  # events travel as JSON
@@ -22,6 +23,8 @@ import math  # NaN check
 import os  # settings
 import queue  # hand events from the receiver thread to the reader
 import threading  # receiver thread
+import time  # batching clock and unique match ids
+from datetime import datetime, timedelta, timezone  # where the reader starts
 
 END = {"event_type": "end_of_match"}  # control message that closes a match
 
@@ -52,7 +55,8 @@ def to_json(ev):  # one event as JSON text, with NaN and numpy numbers made plai
 class EventHubPublisher:
     """publish(event) sends one event; close() sends the end-of-match message and closes the connection."""
 
-    def __init__(self, producer=None):
+    def __init__(self, producer=None, partition_id=None):  # partition_id: send to one fixed partition (fast to read back) instead of hashing the match id
+        self.partition_id = partition_id
         if producer is None:
             from azure.eventhub import EventHubProducerClient  # imported here so the package is optional
             conn, hub = _env()
@@ -62,15 +66,33 @@ class EventHubPublisher:
         self.producer = producer
         self.match_id = None
 
+    def _batch(self, key):
+        return self.producer.create_batch(partition_id=self.partition_id) if self.partition_id is not None else self.producer.create_batch(partition_key=str(key))
+
     def _send(self, payload, key):
         from azure.eventhub import EventData  # imported here so tests can run without the package
-        batch = self.producer.create_batch(partition_key=str(key))
+        batch = self._batch(key)
         batch.add(EventData(payload))
         self.producer.send_batch(batch)
 
     def publish(self, ev):
         self.match_id = ev["match_id"]
         self._send(to_json(ev), ev["match_id"])
+
+    def publish_many(self, evs):  # a list of events in as few batches as the size limit allows; order is kept (one partition key)
+        from azure.eventhub import EventData
+        if not evs:
+            return
+        self.match_id = evs[-1]["match_id"]
+        batch = self._batch(self.match_id)
+        for ev in evs:
+            try:
+                batch.add(EventData(to_json(ev)))
+            except ValueError:  # batch full: send it and start the next
+                self.producer.send_batch(batch)
+                batch = self._batch(self.match_id)
+                batch.add(EventData(to_json(ev)))
+        self.producer.send_batch(batch)
 
     def close(self):
         if self.match_id is not None:
@@ -81,14 +103,14 @@ class EventHubPublisher:
 class EventHubFeed:
     """Reads one match from the hub. Iterate over it to get event dicts, in order, until the end-of-match message."""
 
-    def __init__(self, match_id, consumer=None, consumer_group="$Default", idle_timeout_s=120.0):
+    def __init__(self, match_id, consumer=None, consumer_group="$Default", idle_timeout_s=120.0, since=None, partition_id=None):
         if consumer is None:
             from azure.eventhub import EventHubConsumerClient
             conn, hub = _env()
             if not (conn and hub):
                 raise RuntimeError("Set EVENTHUB_CONNECTION_STRING and EVENTHUB_NAME (see .env.example)")
             consumer = EventHubConsumerClient.from_connection_string(conn, consumer_group=consumer_group, eventhub_name=hub)
-        self.match_id, self.consumer, self.idle_timeout_s = match_id, consumer, idle_timeout_s
+        self.match_id, self.consumer, self.idle_timeout_s, self.since, self.partition_id = match_id, consumer, idle_timeout_s, since, partition_id  # since: start reading at this time
         self.q = queue.Queue()
         self.thread = threading.Thread(target=self._receive, daemon=True)
         self.thread.start()
@@ -102,7 +124,8 @@ class EventHubFeed:
 
     def _receive(self):
         try:
-            self.consumer.receive(on_event=self._on_event, starting_position="-1")  # from the start of the stream
+            extra = {"partition_id": self.partition_id} if self.partition_id is not None else {}  # one partition: no load balancing, so no start-up delay
+            self.consumer.receive(on_event=self._on_event, starting_position=self.since or "-1", **extra)  # from a given time, else the start of the stream
         except Exception as e:  # tell the reader instead of failing silently
             self.q.put({"event_type": "error", "message": f"{type(e).__name__}: {e}"})
 
@@ -121,3 +144,30 @@ class EventHubFeed:
             self.consumer.close()
         except Exception:
             pass
+
+
+def roundtrip_feed(events, speed, flush_s=0.25, max_batch=200):
+    """A match goes into Azure Event Hubs at `speed` times real time and comes back out as a live feed.
+    The reader attaches first; a background thread publishes. The match gets a fresh id, so runs never mix."""
+    from streamer import stream_events  # paced replay
+    run_id = int(time.time() * 1000) % 1_000_000_000
+    feed = EventHubFeed(run_id, since=datetime.now(timezone.utc) - timedelta(seconds=10), partition_id="0")
+    pub = EventHubPublisher(partition_id="0")
+
+    def send():
+        try:
+            buf, last = [], time.monotonic()
+            for ev in stream_events(events, speed):
+                buf.append({**ev, "match_id": run_id})
+                if len(buf) >= max_batch or time.monotonic() - last >= flush_s:
+                    pub.publish_many(buf)
+                    buf, last = [], time.monotonic()
+            pub.publish_many(buf)
+        finally:
+            try:
+                pub.close()  # sends the end-of-match message
+            except Exception:
+                pass
+
+    threading.Thread(target=send, daemon=True).start()
+    return feed
